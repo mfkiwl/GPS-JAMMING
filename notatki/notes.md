@@ -1,5 +1,3 @@
-Oto sformatowana notatka w stylu, który fajnie sprawdzi się jako commit note albo notatka projektowa do gita:
-
 ---
 
 # 📝 Notatka projektowa – gps-jammer-app
