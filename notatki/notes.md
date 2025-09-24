@@ -103,5 +103,3 @@ gps-jammer-app/                       # Główny katalog aplikacji
 ```
 
 ---
-
-Chcesz, żebym przygotował z tego **changelog/commit message** w stylu np. *Conventional Commits* (`feat:`, `fix:`, `refactor:` itd.), czy raczej ma to zostać jako ogólna notatka projektowa?
