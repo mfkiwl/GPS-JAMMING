@@ -120,57 +120,57 @@ extern void updateNavStatusWin(int counter)
   // Update elapsed time and UTC
   // mvwprintw(win1, 1, 2, "Elapsed Time:   %.3f", sdrstat.elapsedTime);
   // mvwprintw(win1, 2, 2, "%s", bufferNav);
-  printf("ETIME|%.3f", sdrstat.elapsedTime);
-  printf("TIME|%s", bufferNav);
+  printf("ETIME|%.3f\n", sdrstat.elapsedTime);
+  printf("TIME|%s\n", bufferNav);
 
   // Update filter mode
   if (sdrini.ekfFilterOn) {
     // mvwprintw(win1, 1, 70, "Filter Mode: Kalman (EKF)");
-    printf("FILTER|EKF");
+    printf("FILTER|EKF\n");
   } else {
     // mvwprintw(win1, 1, 70, "Filter Mode: Least Squares (WLS)");
-    printf("FILTER|WLS");
+    printf("FILTER|WLS\n");
   }
 
   // Update acquired SVs
   sprintf(bufferNav, "");
   for (int i=0; i<32; i++) {
     if (flagacq[i] ==1) {
-      sprintf(str1, "%02d  ", prn[i]);
+      sprintf(str1, "%02d ", prn[i]);
       strcat(bufferNav, str1);
     }
   }
   // mvwprintw(win1, 4, 2, "%s", bufferNav);
-  printf("ACQSV|%s", bufferNav);
+  printf("ACQSV|%s\n", bufferNav);
 
   // Update tracked SVs
   sprintf(bufferNav, "");
   for (int i=0; i<32; i++) {
     if (flagsync[i] ==1) {
-      sprintf(str1, "%02d  ", prn[i]);
+      sprintf(str1, "%02d ", prn[i]);
       strcat(bufferNav, str1);
     }
   }
   // mvwprintw(win1, 5, 2, "%s", bufferNav);
-  printf("TRACKED|%s", bufferNav);
+  printf("TRACKED|%s\n", bufferNav);
 
   // Update nav decoded SVs
   sprintf(bufferNav, "");
   for (int i=0; i<32; i++) {
     if (flagdec[i] ==1) {
-      sprintf(str1, "%02d  ", prn[i]);
+      sprintf(str1, "%02d ", prn[i]);
       strcat(bufferNav, str1);
     }
   }
   // mvwprintw(win1, 6, 2, "%s", bufferNav);
-  printf("DECODED|%s", bufferNav);
+  printf("DECODED|%s\n", bufferNav);
 
   // Update LLA data
   // LAT, LON, ALT, GDOP, CB
   sprintf(bufferNav, "%.7f|%.7f|%.1f|%.2f|%.5e",
     lat, lon, hgt, gdop, clkBias/CTIME);
   // mvwprintw(win1, 8, 2, "%s", bufferNav);
-  printf("LLA|%02d|%s", nsat, bufferNav);
+  printf("LLA|%02d|%s\n", nsat, bufferNav);
 
   // Display Obs data for all valid SVs once it is calculated
   for (int i=0; i<nsat; i++) {
@@ -187,7 +187,7 @@ extern void updateNavStatusWin(int counter)
       rk1_v[(prn-1)],
       vk1_v[(prn-1)]);
     // mvwprintw(win1, 10+i, 2, "%s", bufferNav);
-    printf("OBS|%s", bufferNav);
+    printf("OBS|%s\n", bufferNav);
   }
 
   // Refresh win1
