@@ -3,7 +3,7 @@
 *
 * Copyright (C) 2014 Taro Suzuki <gnsssdrlib@gmail.com>
 *-----------------------------------------------------------------------------*/
-#include "../../../src/sdr.h"
+#include "../../sdr.h"
 
 static rtlsdr_dev_t *dev=NULL;
 

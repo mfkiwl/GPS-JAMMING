@@ -199,18 +199,17 @@ extern void startsdr(void)
   // Create threads ---------------------------------------------------------
   // Keyboard thread
   //ret = pthread_create(&hkeythread,&attr2,keythread,NULL);
-  ret = pthread_create(&hkeythread,NULL,keythread,NULL);
-  if (ret) {
-    printf(BRED "Create for keyboard thread failed: %s\n" reset,
-         strerror(ret));
-  }
+  // ret = pthread_create(&hkeythread,NULL,keythread,NULL);
+  // if (ret) {
+  //   printf(BRED "Create for keyboard thread failed: %s\n" reset,
+  //        strerror(ret));
+  // }
 
   // Sync thread
   //ret = pthread_create(&hsyncthread,&attr1,syncthread,NULL);
   ret = pthread_create(&hsyncthread,NULL,syncthread,NULL);
   if (ret) {
-    printf(BRED "Create for sync thread failed: %s\n" reset,
-           strerror(ret));
+    printf("Create for sync thread failed: %s\n", strerror(ret));
   }
 
   // SDR channel threads
@@ -220,8 +219,7 @@ extern void startsdr(void)
       //ret=pthread_create(&sdrch[i].hsdr,&attr1,sdrthread,&sdrch[i]);
       ret=pthread_create(&sdrch[i].hsdr,NULL,sdrthread,&sdrch[i]);
       if (ret) {
-        printf(BRED "Create for sdr thread failed: %s\n" reset,
-               strerror(ret));
+        printf("Create for sdr thread failed: %s\n", strerror(ret));
       } // if
     } // if
   } // for (sdrch threads)
@@ -230,7 +228,7 @@ extern void startsdr(void)
   //ret=pthread_create(&hdatathread,&attr1,datathread,NULL);
   ret=pthread_create(&hdatathread,NULL,datathread,NULL);
   if (ret) {
-    printf(BRED "Create for data thread failed: %s\n" reset, strerror(ret));
+    printf("Create for data thread failed: %s\n", strerror(ret));
   }
 
   // Initialize ncurses
@@ -257,7 +255,7 @@ extern void startsdr(void)
   // int hgt2, wid2;
   // int starty2, startx2;
   // int scr_width, scr_height;
-  // int counter = 0;
+  int counter = 0;
 
   // Get size of stdscr
   // getmaxyx(stdscr, scr_height, scr_width);
@@ -298,8 +296,8 @@ extern void startsdr(void)
     sdrstat.elapsedTime = ((seconds * 1000) + (ns / 1e6) ) / 1000.0;
 
     // Update both status windows
-    updateNavStatusWin(win1, counter);
-    updateProgramStatusWin(win2, hgt2);
+    updateNavStatusWin(counter);
+    updateProgramStatusWin();
 
     // Update counter (used in Nav Status win)
     counter++;

@@ -26,8 +26,9 @@ Zakres prac obejmuje:
 ### Łysy kod
 
 * [ ] Edycja – usunąć rzeczy nieużywane
-* [ ] Wywalić całość (brak sensu istnienia)
-* [ ] Wywalić `config file` (raczej cały katalog)
+* [x] Wywalić GUI
+* [ ] Hardcodować configi
+* [ ] Dodać obsługę kodu z poziomu frontendu
 
 ### Sygnalówka
 

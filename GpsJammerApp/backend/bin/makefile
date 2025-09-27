@@ -16,7 +16,7 @@ BLADERF=../rcv/bladerf
 INCLUDE=-I$(SRC) -I$(RTKLIB) -I$(RTLSDR) -I$(BLADERF) -I$(NMLLIB)
 
 CC=gcc
-OPTIONS=-DSSE2_ENABLE -DFFTMTX
+OPTIONS=-DSSE2_ENABLE -DFFTMTX -ggdb
 
 LIBS=-lfec -lusb-1.0
 
@@ -50,7 +50,6 @@ LDLIBS=-lm -lrt -lfftw3f -lfftw3f_threads -lpthread $(LIBS)
 BIN= gnss-sdrlib-pvt
 $(BIN): $(OBS)
 	 $(CC) -o $(BIN) $(OBS) $(CFLAGS) $(LDLIBS)
-	 @cp $(BIN) ../../bin
 
 sdrmain.o: $(SRC)/sdrmain.c
 	$(CC) -c $(CFLAGS) $(SRC)/sdrmain.c

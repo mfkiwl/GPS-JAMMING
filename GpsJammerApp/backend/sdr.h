@@ -41,7 +41,6 @@
 #include <fftw3.h>
 #include "rtklib.h"
 #include <libusb-1.0/libusb.h>
-#include "ansiColorCodes.h"
 #include <pthread.h>
 #include <ncurses.h>
 
@@ -654,8 +653,8 @@ extern void file_getbuff(uint64_t buffloc, int n, int ftype, int dtype,
 
 // sdrgui.c -------------------------------------------------------------------
 extern void add_message(const char *msg);
-extern void updateNavStatusWin(WINDOW *win1, int counter);
-extern void updateProgramStatusWin(WINDOW *win2, int height);
+extern void updateNavStatusWin(int counter);
+extern void updateProgramStatusWin();
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,14 @@
 
 #include "sdr.h"
 
+// Inicjalizacja tablicy wskaźników na NULL
+void init_sdrgui_messages() {
+  for (int i = 0; i < MAX_MESSAGES; i++) {
+    sdrgui.messages[i] = NULL;
+  }
+  sdrgui.message_count = 0;
+}
+
 //-----------------------------------------------------------------------------
 // Supporting GUI functions
 //-----------------------------------------------------------------------------
@@ -17,11 +25,14 @@ extern void add_message(const char *msg)
   if (sdrgui.message_count < MAX_MESSAGES) {
       sdrgui.messages[sdrgui.message_count++] = strdup(msg);
   } else {
-    free(sdrgui.messages[0]);
+    if (sdrgui.messages[0] != NULL) {
+      free(sdrgui.messages[0]);
+      sdrgui.messages[0] = NULL;
+    }
     for (int i = 1; i < MAX_MESSAGES; i++) {
       sdrgui.messages[i - 1] = sdrgui.messages[i];
     }
-      sdrgui.messages[MAX_MESSAGES - 1] = strdup(msg);
+    sdrgui.messages[MAX_MESSAGES - 1] = strdup(msg);
   }
   pthread_mutex_unlock(&hmsgmtx);
 }
@@ -43,7 +54,7 @@ extern void *message_producer(void *arg)
 }
 */
 
-extern void updateNavStatusWin(WINDOW *win1, int counter)
+extern void updateNavStatusWin(int counter)
 {
   // Pull data from sdrstat and sdrch
   int prn[32] = {0};
@@ -110,15 +121,15 @@ extern void updateNavStatusWin(WINDOW *win1, int counter)
   // mvwprintw(win1, 1, 2, "Elapsed Time:   %.3f", sdrstat.elapsedTime);
   // mvwprintw(win1, 2, 2, "%s", bufferNav);
   printf("ETIME|%.3f", sdrstat.elapsedTime);
-  printf("TIME|%s", bufferNav)
+  printf("TIME|%s", bufferNav);
 
   // Update filter mode
   if (sdrini.ekfFilterOn) {
     // mvwprintw(win1, 1, 70, "Filter Mode: Kalman (EKF)");
-    printf("FILTER|EKF")
+    printf("FILTER|EKF");
   } else {
     // mvwprintw(win1, 1, 70, "Filter Mode: Least Squares (WLS)");
-    printf("FILTER|WLS")
+    printf("FILTER|WLS");
   }
 
   // Update acquired SVs
@@ -157,9 +168,9 @@ extern void updateNavStatusWin(WINDOW *win1, int counter)
   // Update LLA data
   // LAT, LON, ALT, GDOP, CB
   sprintf(bufferNav, "%.7f|%.7f|%.1f|%.2f|%.5e",
-  lat, lon, hgt, gdop, clkBias/CTIME);
+    lat, lon, hgt, gdop, clkBias/CTIME);
   // mvwprintw(win1, 8, 2, "%s", bufferNav);
-  sprintf("LLA|%02d|%s", nsat, bufferNav);
+  printf("LLA|%02d|%s", nsat, bufferNav);
 
   // Display Obs data for all valid SVs once it is calculated
   for (int i=0; i<nsat; i++) {
@@ -176,14 +187,14 @@ extern void updateNavStatusWin(WINDOW *win1, int counter)
       rk1_v[(prn-1)],
       vk1_v[(prn-1)]);
     // mvwprintw(win1, 10+i, 2, "%s", bufferNav);
-    printf("OBS|%s", bufferNav)
+    printf("OBS|%s", bufferNav);
   }
 
   // Refresh win1
   // wrefresh(win1);
 }
 
-extern void updateProgramStatusWin(WINDOW *win2, int hgt2)
+extern void updateProgramStatusWin()
 {
   // pthread_mutex_lock(&hmsgmtx);
 

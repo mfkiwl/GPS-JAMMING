@@ -28,7 +28,7 @@ extern "C" {
 #include "rtl-sdr_export.h"
 
 /*-GNSS-SDRLIB----------------------------------------------------------------*/
-#include "../../../src/sdr.h"
+#include "../../sdr.h"
     
 #define RTLSDR_SAMPLE_RATE      2048000
 #define RTLSDR_FREQUENCY        1575420000
