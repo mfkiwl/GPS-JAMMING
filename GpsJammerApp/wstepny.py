@@ -8,8 +8,8 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
 # <<< TU USTAW WSPÓŁRZĘDNE I ZOOM >>>
-LAT = 50.06143   # Kraków
-LNG = 19.93658
+LAT = 49.7755016   # Kraków
+LNG = 19.6587678
 ZOOM = 13
 # <<< KONIEC USTAWIEŃ >>>
 
