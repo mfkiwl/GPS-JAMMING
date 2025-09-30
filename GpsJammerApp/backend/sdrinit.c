@@ -19,10 +19,8 @@ extern int loadinit(sdrini_t *ini, const char *filename)
     ini->f_sf[1] = 0.0;
     ini->f_if[1] = 0.0;
     ini->dtype[1] = 0;
-    strcpy(ini->file1, filename);
-    ini->useif1 = ON;
-    ini->file2[0] = '\0';
-    ini->useif2 = OFF;
+    strcpy(ini->file, filename);
+    ini->useif = ON;
     ini->rtlsdrppmerr = 0;
     ini->trkcorrn = 4;
     ini->trkcorrd = 1;
@@ -70,8 +68,6 @@ extern int loadinit(sdrini_t *ini, const char *filename)
 //----------------------------------------------------------------------------
 extern int chk_initvalue(sdrini_t *ini)
 {
-    int ret;
-
     // checking frequency input   
     if ((ini->f_sf[0]<=0||ini->f_sf[0]>100e6) ||
         (ini->f_if[0]<0 ||ini->f_if[0]>100e6)) {
@@ -81,36 +77,19 @@ extern int chk_initvalue(sdrini_t *ini)
     }
 
     // checking frequency input   
-    if(ini->useif2) {
-        if ((ini->f_sf[1]<=0||ini->f_sf[1]>100e6) ||
-            (ini->f_if[1]<0 ||ini->f_if[1]>100e6)) {
-                SDRPRINTF("error: wrong freq. input sf2: %.0f if2: %.0f\n",
-                    ini->f_sf[1],ini->f_if[1]);
-                return -1;
-        }
-    }
 
     // checking filepath   
-    if (ini->fend==FEND_FILE   ||
-        ini->fend==FEND_FRTLSDR||ini->fend==FEND_FBLADERF) {
-        if (ini->useif1) {
-            FILE *fp = fopen(ini->file1, "r");
+    if (ini->fend==FEND_FILE   || ini->fend==FEND_FRTLSDR) {
+        if (ini->useif) {
+            FILE *fp = fopen(ini->file, "r");
             if (!fp) {
-                SDRPRINTF("error: file1 doesn't exist: %s\n",ini->file1);
+                SDRPRINTF("error: file doesn't exist: %s\n",ini->file);
                 return -1;
             }
             fclose(fp);
         }
-        if (ini->useif2) {
-            FILE *fp = fopen(ini->file2, "r");
-            if (!fp) {
-                SDRPRINTF("error: file2 doesn't exist: %s\n",ini->file2);
-                return -1;
-            }
-            fclose(fp);
-        }
-        if ((!ini->useif1)&&(!ini->useif2)) {
-            SDRPRINTF("error: file1 or file2 are not selected\n");
+        if (!ini->useif) {
+            SDRPRINTF("error: file is not selected\n");
             return -1;
         }
     }

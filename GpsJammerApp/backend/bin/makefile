@@ -21,11 +21,8 @@ OPTIONS=-DSSE2_ENABLE -DFFTMTX -ggdb
 LIBS=-lfec -lusb-1.0
 
 OBS= sdrmain.o sdrcmn.o sdracq.o sdrcode.o sdrinit.o sdrnav.o\
-     sdrnav_gps.o sdrnav_sbs.o sdrpvt.o sdrrcv.o sdrtrk.o sdrsync.o sdrgui.o\
+     sdrnav_gps.o sdrnav_sbs.o sdrpvt.o sdrrcv.o sdrtrk.o sdrsync.o sdrout.o\
      nml.o nml_util.o rtkcmn.o
-#OBS= sdrmain.o sdrcmn.o sdracq.o sdrcode.o sdrekf.o sdrinit.o sdrnav.o\
-#     sdrnav_gps.o sdrnav_sbs.o sdrpvt.o sdrrcv.o sdrtrk.o sdrsync.o sdrgui.o\
-#     nml.o nml_util.o rtkcmn.o
 
 ifeq ($(USE_RTLSDR),1)
 OPTIONS+=-DRTLSDR
@@ -61,8 +58,8 @@ sdrcode.o: $(SRC)/sdrcode.c
 	$(CC) -c $(CFLAGS) $(SRC)/sdrcode.c
 #sdrekf.o: $(SRC)/sdrekf.c
 #	$(CC) -c $(CFLAGS) $(SRC)/sdrekf.c
-sdrgui.o: $(SRC)/sdrgui.c
-	$(CC) -c $(CFLAGS) $(SRC)/sdrgui.c
+sdrout.o: $(SRC)/sdrout.c
+	$(CC) -c $(CFLAGS) $(SRC)/sdrout.c
 sdrinit.o: $(SRC)/sdrinit.c
 	$(CC) -c $(CFLAGS) $(SRC)/sdrinit.c
 #sdrmsg.o: $(SRC)/sdrmsg.c

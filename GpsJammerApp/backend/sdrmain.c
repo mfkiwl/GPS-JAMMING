@@ -303,7 +303,6 @@ extern void startsdr(void)
 
     // Update both status windows
     updateNavStatusWin(counter);
-    updateProgramStatusWin();
 
     // Update counter (used in Nav Status win)
     counter++;

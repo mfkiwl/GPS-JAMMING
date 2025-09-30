@@ -186,7 +186,7 @@ extern void frtlsdr_pushtomembuf(void)
 
     nread=fread(
         &sdrstat.buff[(sdrstat.buffcnt%MEMBUFFLEN)*2*RTLSDR_DATABUFF_SIZE],
-        1,2*RTLSDR_DATABUFF_SIZE,sdrini.fp1);
+        1,2*RTLSDR_DATABUFF_SIZE,sdrini.fp);
 
     unmlock(hbuffmtx);
 

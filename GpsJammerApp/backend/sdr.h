@@ -213,13 +213,10 @@ typedef struct {
         double f_sf[2];  // sampling frequency (Hz)  
         double f_if[2];  // intermediate frequency (Hz)  
         int dtype[2];    // data type (DTYPEI/DTYPEIQ)  
-        FILE *fp1;       // IF1 file pointer  
-        FILE *fp2;       // IF2 file pointer  
-        char file1[1024]; // IF1 file path  
-        char file2[1024]; // IF2 file path  
+        FILE *fp;       // IF1 file pointer  
+        char file[1024]; // file path  
         char fontfile[1024]; // font file path, DK added
-        int useif1;      // IF1 flag  
-        int useif2;      // IF2 flag  
+        int useif;      // IF1 flag  
         int nch;         // number of sdr channels  
         int nchL1;       // number of L1 channels  
         int nchL2;       // number of L2 channels  
@@ -654,7 +651,6 @@ extern void file_getbuff(uint64_t buffloc, int n, int ftype, int dtype,
 // sdrgui.c -------------------------------------------------------------------
 extern void add_message(const char *msg);
 extern void updateNavStatusWin(int counter);
-extern void updateProgramStatusWin();
 
 #ifdef __cplusplus
 }

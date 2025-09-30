@@ -39,8 +39,8 @@ extern int rcvinit(sdrini_t *ini)
         /* BladeRF Binary File */
         case FEND_FBLADERF:
                 /* IF file open */
-                if ((ini->fp1 = fopen(ini->file1,"rb"))==NULL) {
-                        SDRPRINTF("error: failed to open file : %s\n",ini->file1);
+                if ((ini->fp1 = fopen(ini->file,"rb"))==NULL) {
+                        SDRPRINTF("error: failed to open file : %s\n",ini->file);
                         return -1;
                 }
 
@@ -76,8 +76,8 @@ extern int rcvinit(sdrini_t *ini)
         /* RTL-SDR Binary File */
         case FEND_FRTLSDR:
                 /* IF file open */
-                if ((ini->fp1 = fopen(ini->file1,"rb"))==NULL) {
-                        SDRPRINTF("error: failed to open file : %s\n",ini->file1);
+                if ((ini->fp = fopen(ini->file,"rb"))==NULL) {
+                        SDRPRINTF("error: failed to open file : %s\n",ini->file);
                         return -1;
                 }
 
@@ -97,17 +97,9 @@ extern int rcvinit(sdrini_t *ini)
         /* File */
         case FEND_FILE:
                 /* IF file open (FILE1) */
-                if ((ini->fp1 = fopen(ini->file1,"rb"))==NULL) {
-                        SDRPRINTF("error: failed to open file(FILE1): %s\n",ini->file1);
+                if ((ini->fp = fopen(ini->file,"rb"))==NULL) {
+                        SDRPRINTF("error: failed to open file: %s\n",ini->file);
                         return -1;
-                }
-
-                /* IF file open (FILE2) */
-                if (strlen(ini->file2)!=0) {
-                        if ((ini->fp2 = fopen(ini->file2,"rb"))==NULL) {
-                                SDRPRINTF("error: failed to open file(FILE2): %s\n",ini->file2);
-                                return -1;
-                        }
                 }
 
                 /* frontend buffer size */
@@ -115,16 +107,9 @@ extern int rcvinit(sdrini_t *ini)
                 sdrstat.buffsize=FILE_BUFFSIZE*MEMBUFFLEN; /* total */
 
                 /* memory allocation */
-                if (ini->fp1!=NULL) {
+                if (ini->fp!=NULL) {
                         sdrstat.buff=(uint8_t*)malloc(ini->dtype[0]*sdrstat.buffsize);
                         if (NULL==sdrstat.buff) {
-                                SDRPRINTF("error: failed to allocate memory for the buffer\n");
-                                return -1;
-                        }
-                }
-                if (ini->fp2!=NULL) {
-                        sdrstat.buff2=(uint8_t*)malloc(ini->dtype[1]*sdrstat.buffsize);
-                        if (NULL==sdrstat.buff2) {
                                 SDRPRINTF("error: failed to allocate memory for the buffer\n");
                                 return -1;
                         }
@@ -160,25 +145,14 @@ extern int rcvquit(sdrini_t *ini)
         #endif
 
         /* Front End Binary File */
-        case FEND_FBLADERF:
-        case FEND_FRTLSDR:
-                if (ini->fp1!=NULL) {
-                  fclose(ini->fp1);
-                  ini->fp1=NULL;
-                }
-                break;
-
-        /* File */
-        case FEND_FILE:
-                if (ini->fp1!=NULL) {
-                  fclose(ini->fp1);
-                  ini->fp1=NULL;
-                }
-                if (ini->fp2!=NULL) {
-                  fclose(ini->fp2);
-                  ini->fp2=NULL;
-                }
-                break;
+                                case FEND_FBLADERF:
+                                case FEND_FRTLSDR:
+                                case FEND_FILE:
+                                                                if (ini->fp!=NULL) {
+                                                                        fclose(ini->fp);
+                                                                        ini->fp=NULL;
+                                                                }
+                                                                break;
         default:
                 return -1;
         }
@@ -322,23 +296,17 @@ extern int rcvgetbuff(sdrini_t *ini, uint64_t buffloc, int n, int ftype,
 *-----------------------------------------------------------------------------*/
 extern void file_pushtomembuf(void)
 {
-        size_t nread1=0,nread2=0;
+        size_t nread=0;
 
         mlock(hbuffmtx);
-        if(sdrini.fp1!=NULL) {
-                nread1=fread(&sdrstat.buff[(sdrstat.buffcnt%MEMBUFFLEN)*
+        if(sdrini.fp!=NULL) {
+                nread=fread(&sdrstat.buff[(sdrstat.buffcnt%MEMBUFFLEN)*
                                            sdrini.dtype[0]*FILE_BUFFSIZE],1,sdrini.dtype[0]*FILE_BUFFSIZE,
-                             sdrini.fp1);
-        }
-        if(sdrini.fp2!=NULL) {
-                nread2=fread(&sdrstat.buff2[(sdrstat.buffcnt%MEMBUFFLEN)*
-                                            sdrini.dtype[1]*FILE_BUFFSIZE],1,sdrini.dtype[1]*FILE_BUFFSIZE,
-                             sdrini.fp2);
+                             sdrini.fp);
         }
         unmlock(hbuffmtx);
 
-        if ((sdrini.fp1!=NULL&&(int)nread1<sdrini.dtype[0]*FILE_BUFFSIZE)||
-            (sdrini.fp2!=NULL&&(int)nread2<sdrini.dtype[1]*FILE_BUFFSIZE)) {
+        if ((sdrini.fp!=NULL&&(int)nread<sdrini.dtype[0]*FILE_BUFFSIZE)) {
                 sdrstat.stopflag=ON;
                 SDRPRINTF("end of file!\n");
         }

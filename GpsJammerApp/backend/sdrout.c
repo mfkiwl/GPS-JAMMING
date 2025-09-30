@@ -7,17 +7,12 @@
 
 #include "sdr.h"
 
-// Inicjalizacja tablicy wskaźników na NULL
 void init_sdrgui_messages() {
   for (int i = 0; i < MAX_MESSAGES; i++) {
     sdrgui.messages[i] = NULL;
   }
   sdrgui.message_count = 0;
 }
-
-//-----------------------------------------------------------------------------
-// Supporting GUI functions
-//-----------------------------------------------------------------------------
 
 extern void add_message(const char *msg)
 {
@@ -36,23 +31,6 @@ extern void add_message(const char *msg)
   }
   pthread_mutex_unlock(&hmsgmtx);
 }
-
-/*
-// This function may be used to stream test messages to the GUI
-extern void *message_producer(void *arg)
-{
-  int counter = 1;
-  char buffer[MSG_LENGTH];
-
-  while (1) {
-    snprintf(buffer, sizeof(buffer), "Incoming message #%d", counter++);
-    add_message(buffer);
-    usleep(200000);  // Simulate external message streaming
-  }
-
-  return NULL;
-}
-*/
 
 extern void updateNavStatusWin(int counter)
 {
@@ -109,26 +87,13 @@ extern void updateNavStatusWin(int counter)
      utc_tm.tm_year + 1900, utc_tm.tm_mon + 1, utc_tm.tm_mday,
      utc_tm.tm_hour, utc_tm.tm_min, utc_tm.tm_sec, (int)(gps_tow * 1000) % 1000);
 
-  // Nav status window update
-  // Clear and redraw box
-  // werase(win1);
-  // box(win1, 0, 0);
-  // wattron(win1,A_BOLD);
-  // mvwprintw(win1, 0, 5, " Navigation Status ");
-  // wattroff(win1,A_BOLD);
-
-  // Update elapsed time and UTC
-  // mvwprintw(win1, 1, 2, "Elapsed Time:   %.3f", sdrstat.elapsedTime);
-  // mvwprintw(win1, 2, 2, "%s", bufferNav);
   printf("ETIME|%.3f\n", sdrstat.elapsedTime);
   printf("TIME|%s\n", bufferNav);
 
   // Update filter mode
   if (sdrini.ekfFilterOn) {
-    // mvwprintw(win1, 1, 70, "Filter Mode: Kalman (EKF)");
     printf("FILTER|EKF\n");
   } else {
-    // mvwprintw(win1, 1, 70, "Filter Mode: Least Squares (WLS)");
     printf("FILTER|WLS\n");
   }
 
@@ -140,7 +105,6 @@ extern void updateNavStatusWin(int counter)
       strcat(bufferNav, str1);
     }
   }
-  // mvwprintw(win1, 4, 2, "%s", bufferNav);
   printf("ACQSV|%s\n", bufferNav);
 
   // Update tracked SVs
@@ -151,7 +115,6 @@ extern void updateNavStatusWin(int counter)
       strcat(bufferNav, str1);
     }
   }
-  // mvwprintw(win1, 5, 2, "%s", bufferNav);
   printf("TRACKED|%s\n", bufferNav);
 
   // Update nav decoded SVs
@@ -162,14 +125,12 @@ extern void updateNavStatusWin(int counter)
       strcat(bufferNav, str1);
     }
   }
-  // mvwprintw(win1, 6, 2, "%s", bufferNav);
   printf("DECODED|%s\n", bufferNav);
 
   // Update LLA data
   // LAT, LON, ALT, GDOP, CB
   sprintf(bufferNav, "%.7f|%.7f|%.1f|%.2f|%.5e",
     lat, lon, hgt, gdop, clkBias/CTIME);
-  // mvwprintw(win1, 8, 2, "%s", bufferNav);
   printf("LLA|%02d|%s\n", nsat, bufferNav);
 
   // Display Obs data for all valid SVs once it is calculated
@@ -186,30 +147,7 @@ extern void updateNavStatusWin(int counter)
       obs_v[(prn-1)*11+10],
       rk1_v[(prn-1)],
       vk1_v[(prn-1)]);
-    // mvwprintw(win1, 10+i, 2, "%s", bufferNav);
     printf("OBS|%s\n", bufferNav);
   }
-
-  // Refresh win1
-  // wrefresh(win1);
 }
 
-extern void updateProgramStatusWin()
-{
-  // pthread_mutex_lock(&hmsgmtx);
-
-  // // Clear win, add messages, draw a boundary box, and label
-  // werase(win2);
-  // int start = (sdrgui.message_count > hgt2 - 2) ? sdrgui.message_count - (hgt2 - 2) : 0;
-  // int y = 1;
-  // for (int i = start; i < sdrgui.message_count; i++) {
-  //   mvwprintw(win2, y++, 2, "%s", sdrgui.messages[i]);
-  // }
-  // box(win2, 0, 0);
-  // wattron(win2,A_BOLD);
-  // mvwprintw(win2, 0, 5, " Program Status ");
-  // wattroff(win2,A_BOLD);
-
-  // pthread_mutex_unlock(&hmsgmtx);
-  // wrefresh(win2);
-}
