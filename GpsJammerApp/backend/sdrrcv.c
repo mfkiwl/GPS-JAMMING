@@ -20,41 +20,7 @@ extern int rcvinit(sdrini_t *ini)
 
         switch (ini->fend) {
 
-        #ifdef BLADERF
-        /* Nuand bladeRF */
-        case FEND_BLADERF:
-                if (bladerf_init()<0) return -1; /* bladeRF initialization */
-
-                sdrstat.fendbuffsize=BLADERF_DATABUFF_SIZE; /* frontend buff size */
-                sdrstat.buffsize=2*BLADERF_DATABUFF_SIZE*MEMBUFFLEN; /* total */
-
-                /* memory allocation */
-                sdrstat.buff=(uint8_t*)malloc(sdrstat.buffsize);
-                if (NULL==sdrstat.buff) {
-                        SDRPRINTF("error: failed to allocate memory for the buffer\n");
-                        return -1;
-                }
-                break;
-
-        /* BladeRF Binary File */
-        case FEND_FBLADERF:
-                /* IF file open */
-                if ((ini->fp1 = fopen(ini->file,"rb"))==NULL) {
-                        SDRPRINTF("error: failed to open file : %s\n",ini->file);
-                        return -1;
-                }
-
-                sdrstat.fendbuffsize=BLADERF_DATABUFF_SIZE; /* frontend buff size */
-                sdrstat.buffsize=2*BLADERF_DATABUFF_SIZE*MEMBUFFLEN; /* total */
-
-                /* memory allocation */
-                sdrstat.buff=(uint8_t*)malloc(sdrstat.buffsize);
-                if (NULL==sdrstat.buff) {
-                        SDRPRINTF("error: failed to allocate memory for the buffer\n");
-                        return -1;
-                }
-                break;
-        #endif
+        /* frontend support removed */
 
         #ifdef RTLSDR
         /* RTL-SDR */
@@ -130,12 +96,7 @@ extern int rcvquit(sdrini_t *ini)
 {
         switch (ini->fend) {
 
-        #ifdef BLADERF
-        /* Nuand bladeRF */
-        case FEND_BLADERF:
-                bladerf_quit();
-                break;
-        #endif
+        /* frontend support removed */
 
         #ifdef RTLSDR
         /* RTL-SDR */
@@ -145,14 +106,13 @@ extern int rcvquit(sdrini_t *ini)
         #endif
 
         /* Front End Binary File */
-                                case FEND_FBLADERF:
-                                case FEND_FRTLSDR:
-                                case FEND_FILE:
-                                                                if (ini->fp!=NULL) {
-                                                                        fclose(ini->fp);
-                                                                        ini->fp=NULL;
-                                                                }
-                                                                break;
+        case FEND_FRTLSDR:
+        case FEND_FILE:
+                if (ini->fp != NULL) {
+                        fclose(ini->fp);
+                        ini->fp = NULL;
+                }
+                break;
         default:
                 return -1;
         }
@@ -199,21 +159,7 @@ extern int rcvgrabdata(sdrini_t *ini)
 
         switch (ini->fend) {
 
-        #ifdef BLADERF
-        /* Nuand BladeRF */
-        case FEND_BLADERF:
-                if (bladerf_start()<0) {
-                        SDRPRINTF("error: bladeRF...\n");
-                        return -1;
-                }
-                break;
-
-        /* BladeRF Binary File */
-        case FEND_FBLADERF:
-                fbladerf_pushtomembuf(); /* copy to membuffer */
-                sleepms(5);
-                break;
-        #endif
+        /* frontend support removed */
 
         #ifdef RTLSDR
         /* RTL-SDR */
@@ -255,17 +201,7 @@ extern int rcvgetbuff(sdrini_t *ini, uint64_t buffloc, int n, int ftype,
 {
         switch (ini->fend) {
 
-        #ifdef BLADERF
-        /* Nuand BladeRF */
-        case FEND_BLADERF:
-                bladerf_getbuff(buffloc,n,expbuf);
-                break;
-
-        /* BladeRF Binary File */
-        case FEND_FBLADERF:
-                bladerf_getbuff(buffloc,n,expbuf);
-                break;
-        #endif
+        /* frontend support removed */
 
         #ifdef RTLSDR
         /* RTL-SDR */

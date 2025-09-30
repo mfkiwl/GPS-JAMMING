@@ -137,7 +137,7 @@ extern int rtlsdr_start(void)
 }
 /* data expansion --------------------------------------------------------------
 * get current data buffer from memory buffer
-* args   : int16_t *buf     I   bladeRF raw buffer
+* args   : int16_t *buf     I   raw buffer
 *          int    n         I   number of grab data
 *          char   *expbuf   O   extracted data buffer
 * return : none

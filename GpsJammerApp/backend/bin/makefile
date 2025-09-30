@@ -2,39 +2,22 @@
 # makefile for gnss-sdrlib-pvt
 #
 
-# Use or not use RTLSDR and BLADERF
-# 1:Use 0:Not Use
-USE_RTLSDR=1
-USE_BLADERF=0
-
 SRC=../
 RTKLIB=../lib/rtklib
 NMLLIB=../lib/nml
 RTLSDR=../rcv/rtlsdr
-BLADERF=../rcv/bladerf
 
-INCLUDE=-I$(SRC) -I$(RTKLIB) -I$(RTLSDR) -I$(BLADERF) -I$(NMLLIB)
+INCLUDE=-I$(SRC) -I$(RTKLIB) -I$(RTLSDR) -I$(NMLLIB)
 
 CC=gcc
-OPTIONS=-DSSE2_ENABLE -DFFTMTX -ggdb
+OPTIONS=-DSSE2_ENABLE -DFFTMTX -ggdb -DRTLSDR
 
-LIBS=-lfec -lusb-1.0
+LIBS=-lfec -lusb-1.0 -lrtlsdr
 
 OBS= sdrmain.o sdrcmn.o sdracq.o sdrcode.o sdrinit.o sdrnav.o\
      sdrnav_gps.o sdrnav_sbs.o sdrpvt.o sdrrcv.o sdrtrk.o sdrsync.o sdrout.o\
-     nml.o nml_util.o rtkcmn.o
+     nml.o nml_util.o rtkcmn.o rtlsdr.o convenience.o
 
-ifeq ($(USE_RTLSDR),1)
-OPTIONS+=-DRTLSDR
-LIBS+=-lrtlsdr
-OBS+=rtlsdr.o convenience.o
-endif
-
-ifeq ($(USE_BLADERF),1)
-OPTIONS+=-DBLADERF
-LIBS+=-lbladeRF
-OBS+=bladerf.o
-endif
 
 # Compile flag options:
 # Set -O3 to -O0 to use GDB. Leave as -O3 for best real-time performance.
@@ -86,10 +69,9 @@ nml_util.o    : $(NMLLIB)/nml_util.c
 	$(CC) -c $(CFLAGS) $(NMLLIB)/nml_util.c
 rtlsdr.o : $(RTLSDR)/rtlsdr.c
 	$(CC) -c $(CFLAGS) $(RTLSDR)/rtlsdr.c
+# convenience frontend
 convenience.o : $(RTLSDR)/convenience.c
 	$(CC) -c $(CFLAGS) $(RTLSDR)/convenience.c
-bladerf.o : $(BLADERF)/bladerf.c
-	$(CC) -c $(CFLAGS) $(BLADERF)/bladerf.c
 
 sdrmain.o: $(SRC)/sdr.h
 sdrcmn.o : $(SRC)/sdr.h
@@ -108,7 +90,7 @@ sdrsync.o: $(SRC)/sdr.h
 rtkcmn.o : $(SRC)/sdr.h
 rtlsdr.o : $(SRC)/sdr.h
 convenience.o : $(SRC)/sdr.h
-bladerf.o : $(SRC)/sdr.h
+
 
 clean:
 	rm -f *.o $(BIN)

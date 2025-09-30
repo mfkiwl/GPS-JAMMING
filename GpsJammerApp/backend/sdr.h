@@ -44,11 +44,7 @@
 #include <pthread.h>
 #include <ncurses.h>
 
-// Includes for BladeRF SDR
-#ifdef BLADERF
-  #include <libbladeRF.h>
-  #include "bladeRF.h"
-#endif
+// Frontend support: RTL-SDR (other vendor-specific frontends removed)
 
 // Includes for RTLSDR SDR
 #ifdef RTLSDR
@@ -80,9 +76,7 @@
 
 // front end setting
 #define FEND_RTLSDR   3                // front end type: RTL-SDR  
-#define FEND_BLADERF  4                // front end type: Nuand BladeRF  
 #define FEND_FRTLSDR  8                // front end type: RTL-SDR binary file  
-#define FEND_FBLADERF 9                // front end type: BladeRF binary file  
 #define FEND_FILE     10               // front end type: IF file  
 #define FTYPE1        1                // front end number  
 #define FTYPE2        2                // front end number  
