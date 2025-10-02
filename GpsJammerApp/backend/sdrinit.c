@@ -50,7 +50,6 @@ extern int loadinit(sdrini_t *ini, const char *filename)
     ini->xu0_v[0] = 693570;
     ini->xu0_v[1] = -5193930;
     ini->xu0_v[2] = 3624632;
-    strcpy(ini->fontfile, "/home/donkelly/Documents/GNSS-SDRLIB/GNSS-SDRLIB-DK-WorkingCopy_Dev/src/openSans/OpenSans-Semibold.ttf");
     ini->ekfFilterOn = 0;
     ini->nchL1 = 0;
     for (i=0;i<ini->nch;i++) {
@@ -311,7 +310,7 @@ extern int initnavstruct(int sys, int ctype, int prn, sdrnav_t *nav)
 //         int    prn       I   PRN number
 //         int    ctype     I   code type (CTYPE_***)
 //         int    dtype     I   data type (DTYPEI or DTYPEIQ)
-//         int    ftype     I   front end type (FTYPE1 or FTYPE2)
+//         int    ftype     I   front end type (FTYPE1)
 //         int    f_gain	I	rx gain
 //         int    f_bias	I	rx bias-tee
 //         int    f_clock   I   rx clock (internal or external)

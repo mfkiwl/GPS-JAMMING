@@ -16,7 +16,7 @@ extern int rcvinit(sdrini_t *ini)
         /* FFT initialization */
         fftwf_init_threads();
 
-        sdrstat.buff=sdrstat.buff2=sdrstat.tmpbuff=NULL;
+        sdrstat.buff=sdrstat.tmpbuff=NULL;
 
         switch (ini->fend) {
 
@@ -122,14 +122,10 @@ extern int rcvquit(sdrini_t *ini)
           free(sdrstat.buff);
           sdrstat.buff=NULL;
         }
-        if (NULL!=sdrstat.buff2) {
-          free(sdrstat.buff2);
-          sdrstat.buff2=NULL;
-        }
-        if (NULL!=sdrstat.tmpbuff) {
-          free(sdrstat.tmpbuff);
-          sdrstat.tmpbuff=NULL;
-        }
+                                if (NULL!=sdrstat.tmpbuff) {
+                                        free(sdrstat.tmpbuff);
+                                        sdrstat.tmpbuff=NULL;
+                                }
         return 0;
 }
 
@@ -191,7 +187,7 @@ extern int rcvgrabdata(sdrini_t *ini)
 * args   : sdrini_t *ini    I   sdr initialization struct
 *          uint64_t buffloc I   buffer location
 *          int    n         I   number of grab data
-*          int    ftype     I   front end type (FTYPE1 or FTYPE2)
+*          int    ftype     I   front end type (FTYPE1)
 *          int    dtype     I   data type (DTYPEI or DTYPEIQ)
 *          char   *expbuff  O   extracted data buffer
 * return : int                  status 0:okay -1:failure
@@ -256,7 +252,7 @@ extern void file_pushtomembuf(void)
 * post-processing function: get current data buffer from memory buffer
 * args   : uint64_t buffloc I   buffer location
 *          int    n         I   number of grab data
-*          int    ftype     I   front end type (FTYPE1 or FTYPE2)
+*          int    ftype     I   front end type (FTYPE1)
 *          int    dtype     I   data type (DTYPEI or DTYPEIQ)
 *          char   *expbuff  O   extracted data buffer
 * return : none
@@ -271,21 +267,12 @@ extern void file_getbuff(uint64_t buffloc, int n, int ftype, int dtype,
         nout=(int)((membuffloc+n)-(MEMBUFFLEN*dtype*FILE_BUFFSIZE));
 
         mlock(hbuffmtx);
-        if (ftype==FTYPE1) {
-                if (nout>0) {
-                        memcpy(expbuf,&sdrstat.buff[membuffloc],n-nout);
-                        memcpy(&expbuf[(n-nout)],&sdrstat.buff[0],nout);
-                } else {
-                        memcpy(expbuf,&sdrstat.buff[membuffloc],n);
-                }
-        }
-        if (ftype==FTYPE2) {
-                if (nout>0) {
-                        memcpy(expbuf,&sdrstat.buff2[membuffloc],n-nout);
-                        memcpy(&expbuf[(n-nout)],&sdrstat.buff2[0],nout);
-                } else {
-                        memcpy(expbuf,&sdrstat.buff2[membuffloc],n);
-                }
+        /* Only one frontend/file buffer is supported in simplified mode */
+        if (nout>0) {
+                memcpy(expbuf,&sdrstat.buff[membuffloc],n-nout);
+                memcpy(&expbuf[(n-nout)],&sdrstat.buff[0],nout);
+        } else {
+                memcpy(expbuf,&sdrstat.buff[membuffloc],n);
         }
         unmlock(hbuffmtx);
 }

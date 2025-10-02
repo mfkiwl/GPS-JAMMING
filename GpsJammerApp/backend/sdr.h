@@ -42,7 +42,7 @@
 #include "rtklib.h"
 #include <libusb-1.0/libusb.h>
 #include <pthread.h>
-#include <ncurses.h>
+// ncurses removed for simplified offline analysis (console logging only)
 
 // Frontend support: RTL-SDR (other vendor-specific frontends removed)
 
@@ -79,7 +79,6 @@
 #define FEND_FRTLSDR  8                // front end type: RTL-SDR binary file  
 #define FEND_FILE     10               // front end type: IF file  
 #define FTYPE1        1                // front end number  
-#define FTYPE2        2                // front end number  
 #define DTYPEI        1                // sampling type: real  
 #define DTYPEIQ       2                // sampling type: real+imag  
 
@@ -209,7 +208,6 @@ typedef struct {
         int dtype[2];    // data type (DTYPEI/DTYPEIQ)  
         FILE *fp;       // IF1 file pointer  
         char file[1024]; // file path  
-        char fontfile[1024]; // font file path, DK added
         int useif;      // IF1 flag  
         int nch;         // number of sdr channels  
         int nchL1;       // number of L1 channels  
@@ -219,7 +217,7 @@ typedef struct {
         int prn[MAXSAT]; // PRN of channels  
         int sys[MAXSAT]; // satellite system type of channels (SYS_*)  
         int ctype[MAXSAT]; // code type of channels (CTYPE_* ) 
-        int ftype[MAXSAT]; // front end type of channels (FTYPE1/FTYPE2)  
+        int ftype[MAXSAT]; // front end type of channels (FTYPE1)  
         int pltacq;      // plot acquisition flag  
         int plttrk;      // plot tracking flag  
         int pltspec;     // plot spectrum flag  
@@ -246,7 +244,6 @@ typedef struct {
         int buffsize;    // data buffer size  
         int fendbuffsize; // front end data buffer size  
         unsigned char *buff; // IF data buffer  
-        unsigned char *buff2;// IF data buffer (for file input)  
         unsigned char *tmpbuff; // USB temporary buffer (for STEREO_V26)  
         uint64_t buffcnt; // current buffer location  
         int printflag; // DK added, flag for printing obs and nav file
@@ -464,10 +461,8 @@ typedef struct {
 // global variables -----------------------------------------------------------
 extern thread_t hmainthread;  // main thread handle  
 extern thread_t hsyncthread;  // synchronization thread handle  
-extern thread_t hkeythread;   // keyboard thread handle  
-extern thread_t hdatathread;   // keyboard thread handle  
-extern thread_t hserverthread;   // server thread  
-extern thread_t hmsgthread;   // GUI messages thread  
+extern thread_t hdatathread;   // data thread handle  
+extern thread_t hmsgthread;   // GUI/messages thread  
 
 extern mlock_t hbuffmtx;      // buffer access mutex  
 extern mlock_t hreadmtx;      // buffloc access mutex  
