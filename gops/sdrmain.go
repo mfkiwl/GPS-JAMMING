@@ -14,7 +14,15 @@ func UpdateNavStatusWin(counter int) {
     fmt.Printf("NavStatusWin [%d]:\n", counter)
     for i := 0; i < sdrini.Nch; i++ {
         ch := &sdrch[i]
-        fmt.Printf("PRN:%2d SNR:%.1f El:%.1f Acq:%d Trk:%d\n", ch.Prn, ch.Trk.S[0], ch.Trk.L[0], ch.FlagAcq, ch.FlagTrk)
+        snr := 0.0
+        el := 0.0
+        if len(ch.Trk.S) > 0 {
+            snr = ch.Trk.S[0]
+        }
+        if len(ch.Trk.L) > 0 {
+            el = ch.Trk.L[0]
+        }
+        fmt.Printf("PRN:%2d SNR:%.1f El:%.1f Acq:%d Trk:%d\n", ch.Prn, snr, el, ch.FlagAcq, ch.FlagTrk)
     }
 }
 
@@ -64,9 +72,19 @@ func syncThread(arg interface{}) {
         hobsmtx.Lock()
         for i := 0; i < sdrini.Nch; i++ {
             ch := &sdrch[i]
-            // Example: copy SNR and pseudorange to ObsV
-            sdrstat.ObsV[i*11+0] = ch.Trk.S[0]
-            sdrstat.ObsV[i*11+1] = ch.Trk.L[0]
+            // Safe copy SNR and pseudorange to ObsV
+            snr := 0.0
+            el := 0.0
+            if len(ch.Trk.S) > 0 {
+                snr = ch.Trk.S[0]
+            }
+            if len(ch.Trk.L) > 0 {
+                el = ch.Trk.L[0]
+            }
+            if len(sdrstat.ObsV) > i*11+1 {
+                sdrstat.ObsV[i*11+0] = snr
+                sdrstat.ObsV[i*11+1] = el
+            }
         }
         hobsmtx.Unlock()
         time.Sleep(10 * time.Millisecond)
@@ -94,11 +112,15 @@ func sdrThread(arg interface{}) {
 
 // dataThread: translated from C datathread
 func dataThread(arg interface{}) {
-    // Data grabber loop: read samples, push to buffer, update BuffCnt
+    // Data grabber loop: read samples from file and push to buffer
+    if RcvGrabStart(&sdrini) < 0 {
+        quitsdr(&sdrini, 4)
+        return
+    }
     for sdrstat.StopFlag == 0 {
-        // Example: simulate buffer update
-        sdrstat.BuffCnt++
-        time.Sleep(10 * time.Millisecond)
+        if RcvGrabData(&sdrini, &sdrstat) < 0 {
+            sdrstat.StopFlag = ON
+        }
     }
     fmt.Println("SDR dataThread finished!")
 }

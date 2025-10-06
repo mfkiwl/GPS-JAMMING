@@ -40,7 +40,7 @@ const (
 	ACQINTG_SBAS  = 10
 	ACQHBAND      = 7000
 	ACQSTEP       = 200
-	ACQTH         = 3.0
+	ACQTH         = 3.0  // Back to original threshold
 	ACQSLEEP      = 2000
 
 	LOOP_L1CA     = 10

@@ -1,4 +1,3 @@
-
 // sdrcmn.go : SDR common functions (Go version)
 // Translated from sdrcmn.c
 package main
@@ -7,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"time"
+	"fmt"
 
  	"gonum.org/v1/gonum/dsp/fourier"
 )
@@ -20,10 +20,12 @@ func CalcFFTNum(x float64, next int) int {
 	return int(math.Pow(2.0, float64(nn)))
 }
 
-func MeanVD(data []float64, exinds, exinde int) float64 {
+func MeanVD(data []float64, n int, exinds, exinde int) float64 {
+	if n <= 0 || n > len(data) {
+		n = len(data)
+	}
 	ne := 0
 	mean := 0.0
-	n := len(data)
 	for i := 0; i < n; i++ {
 		if (exinds <= exinde && (i < exinds || i > exinde)) ||
 			(exinds > exinde && (i < exinds && i > exinde)) {
@@ -65,10 +67,13 @@ func MaxVF(data []float32, exinds, exinde int) (max float32, ind int) {
 	return
 }
 
-func MaxVD(data []float64, exinds, exinde int) (max float64, ind int) {
+func MaxVD(data []float64, n int, exinds, exinde int) (max float64, ind int) {
+	if n <= 0 || n > len(data) {
+		n = len(data)
+	}
 	max = data[0]
 	ind = 0
-	for i := 1; i < len(data); i++ {
+	for i := 1; i < n; i++ {
 		if (exinds <= exinde && (i < exinds || i > exinde)) ||
 			(exinds > exinde && (i < exinds && i > exinde)) {
 			if max < data[i] {
@@ -191,52 +196,81 @@ func GetFullPath(relpath string) (string, error) {
 	return filepath.Abs(relpath)
 }
 
-// Resample code (uproszczona wersja)
+// Resample code (dokładnie jak w C) z debuggingiem
 func ResCode(code []int16, len int, coff float64, smax int, ci float64, n int, rcode []int16) float64 {
+	// Simplified debug for first few calls only
+	if len < 50 {
+		fmt.Printf("ResCode: len=%d, n=%d\n", len, n)
+	}
+	
 	coff -= float64(smax) * ci
 	coff -= math.Floor(coff/float64(len)) * float64(len)
-	for i := 0; i < n+2*smax; i++ {
-		idx := int(coff)
-		if idx >= len {
-			idx -= len
-		}
-		rcode[i] = code[idx]
-		coff += ci
+	
+	// Safety check: nie pisz poza bounds
+	maxElements := min(n+2*smax, len_of_slice(rcode))
+	
+	for i := 0; i < maxElements; i++ {
 		if coff >= float64(len) {
 			coff -= float64(len)
 		}
+		idx := int(coff)
+		rcode[i] = code[idx]
+		coff += ci
 	}
+	
 	return coff - float64(smax)*ci
 }
 
-// Mix local carrier (uproszczona wersja)
+func len_of_slice(slice []int16) int {
+	return len(slice)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// Mix local carrier (dokładnie zgodnie z kodem C)
 func MixCarr(data []byte, dtype int, ti float64, n int, freq, phi0 float64, II, QQ []int16) float64 {
 	DPI := 2.0 * math.Pi
 	CDIV := 32
+	CMASK := 0x1F
 	CSCALE := 1.0 / 32.0
-	cost := make([]float64, CDIV)
-	sint := make([]float64, CDIV)
+	
+	// Inicjalizacja tabeli nośnej (zgodnie z C: short floor(cos/sin/CSCALE + 0.5))
+	cost := make([]int16, CDIV)
+	sint := make([]int16, CDIV)
 	for i := 0; i < CDIV; i++ {
-		cost[i] = math.Cos(DPI/float64(CDIV)*float64(i)) / CSCALE
-		sint[i] = math.Sin(DPI/float64(CDIV)*float64(i)) / CSCALE
+		cost[i] = int16(math.Floor(math.Cos(DPI/float64(CDIV)*float64(i))/CSCALE + 0.5))
+		sint[i] = int16(math.Floor(math.Sin(DPI/float64(CDIV)*float64(i))/CSCALE + 0.5))
 	}
+	
 	phi := phi0 * float64(CDIV) / DPI
-	ps := freq * float64(CDIV) * ti
-	if dtype == DTYPEIQ {
+	ps := freq * float64(CDIV) * ti // phase step
+	
+	if dtype == DTYPEIQ { // complex
 		for i := 0; i < n; i++ {
-			index := int(phi) % CDIV
-			II[i] = int16(cost[index] * float64(data[2*i]) - sint[index] * float64(data[2*i+1]))
-			QQ[i] = int16(sint[index] * float64(data[2*i]) + cost[index] * float64(data[2*i+1]))
+			index := int(phi) & CMASK
+			// Treat bytes as signed chars like C code does
+			dataI := int8(data[2*i])
+			dataQ := int8(data[2*i+1])
+			II[i] = cost[index]*int16(dataI) - sint[index]*int16(dataQ)
+			QQ[i] = sint[index]*int16(dataI) + cost[index]*int16(dataQ)
 			phi += ps
 		}
-	} else if dtype == DTYPEI {
+	} else if dtype == DTYPEI { // real
 		for i := 0; i < n; i++ {
-			index := int(phi) % CDIV
-			II[i] = int16(cost[index] * float64(data[i]))
-			QQ[i] = int16(sint[index] * float64(data[i]))
+			index := int(phi) & CMASK
+			// Treat bytes as signed chars like C code does
+			dataVal := int8(data[i])
+			II[i] = cost[index] * int16(dataVal)
+			QQ[i] = sint[index] * int16(dataVal)
 			phi += ps
 		}
 	}
+	
 	prem := phi * DPI / float64(CDIV)
 	for prem > DPI {
 		prem -= DPI

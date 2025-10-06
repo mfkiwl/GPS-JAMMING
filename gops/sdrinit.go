@@ -10,7 +10,7 @@ import (
 
 // Load initial value
 func LoadInit(ini *SdrIni, filename string) error {
-	ini.Fend = FEND_FRTLSDR
+	ini.Fend = FEND_FILE // Use FEND_FILE for file input, matching original C logic
 	ini.FCf[0] = 1575.42e6
 	ini.FSf[0] = 2.048e6
 	ini.FIf[0] = 0.0

@@ -1,6 +1,7 @@
 // sdrrcv.go : SDR receiver functions (Go version)
 // Translated from sdrrcv.c
 package main
+// Buffer size constants (match original C logic)
 
 import (
 	"os"
@@ -26,8 +27,9 @@ func RcvInit(ini *SdrIni, sdrstat *SdrStat) error {
 		sdrstat.FendBuffSize = FILE_BUFFSIZE
 		sdrstat.BuffSize = FILE_BUFFSIZE * MEMBUFFLEN
 		if ini.fp != nil {
+			// Allocate buffer for all channels and all data
 			sdrstat.Buff = make([]byte, ini.Dtype[0]*sdrstat.BuffSize)
-			if sdrstat.Buff == nil {
+			if sdrstat.Buff == nil || len(sdrstat.Buff) == 0 {
 				SDRPRINTF("error: failed to allocate memory for the buffer\n")
 				return err
 			}
@@ -98,9 +100,10 @@ func FilePushToMemBuf(ini *SdrIni, sdrstat *SdrStat) {
 		n, err := ini.fp.Read(buf)
 		nread = n
 		if err != nil && err.Error() != "EOF" {
-			// handle error
+			SDRPRINTF("FilePushToMemBuf: read error: %v\n", err)
 		}
 		copy(sdrstat.Buff[int((sdrstat.BuffCnt%uint64(MEMBUFFLEN))*uint64(ini.Dtype[0])*uint64(FILE_BUFFSIZE)):], buf[:nread])
+		SDRPRINTF("FilePushToMemBuf: BuffCnt=%d, bytes read=%d\n", sdrstat.BuffCnt, nread)
 	}
 	buffmtx.Unlock()
 	if ini.fp != nil && nread < ini.Dtype[0]*FILE_BUFFSIZE {
@@ -116,12 +119,23 @@ func FileGetBuff(buffloc uint64, n, ftype, dtype int, expbuf []byte) {
 	membuffloc := dtype*int(buffloc) % (MEMBUFFLEN*dtype*FILE_BUFFSIZE)
 	n = dtype * n
 	nout := (membuffloc + n) - (MEMBUFFLEN * dtype * FILE_BUFFSIZE)
+	bufflen := MEMBUFFLEN * dtype * FILE_BUFFSIZE
 	buffmtx.Lock()
 	if nout > 0 {
-		copy(expbuf, sdrstat.Buff[membuffloc:membuffloc+n-nout])
+		start := membuffloc
+		end := membuffloc + n - nout
+		if start < 0 { start = 0 }
+		if end < 0 { end = 0 }
+		if end > bufflen { end = bufflen }
+		copy(expbuf, sdrstat.Buff[start:end])
 		copy(expbuf[n-nout:], sdrstat.Buff[:nout])
 	} else {
-		copy(expbuf, sdrstat.Buff[membuffloc:membuffloc+n])
+		start := membuffloc
+		end := membuffloc + n
+		if start < 0 { start = 0 }
+		if end < 0 { end = 0 }
+		if end > bufflen { end = bufflen }
+		copy(expbuf, sdrstat.Buff[start:end])
 	}
 	buffmtx.Unlock()
 }
