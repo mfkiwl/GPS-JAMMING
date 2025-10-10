@@ -27,7 +27,6 @@ def linear_trajectory(start_lat, start_lon, start_alt,
 
     with open(out_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["time_s", "latitude", "longitude", "altitude_m"])
         writer.writerows(rows)
 
     print(f"[generate_trajectory] Zapisano {len(rows)} wierszy do {out_file}")

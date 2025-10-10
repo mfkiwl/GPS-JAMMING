@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import messagebox
 import re
+import subprocess
+import sys
+import os
 
 class App(tk.Tk):
     def __init__(self):
@@ -44,24 +47,17 @@ class App(tk.Tk):
         self.entries = []
         self.row_widgets = []  # (label_widget, entry_widget)
 
-        # --- WALIDATORY NA KLAWISZ ---
-        # latitude: do 2 cyfr przed kropką, do 7 po kropce
         self.v_lat_key = (self.register(self._validate_lat_key), "%P")
-        # longitude: do 3 cyfr przed kropką, do 7 po kropce
         self.v_lon_key = (self.register(self._validate_lon_key), "%P")
-        # seconds tylko cyfry
         self.v_sec_key = (self.register(self._validate_seconds_key), "%P")
-        # filename .bin na focusout
         self.v_file_focusout = (self.register(self._validate_filename_focusout), "%P")
-        # altitude: liczba z opcjonalnym minusem, do 3 miejsc po kropce
         self.v_alt_key = (self.register(self._validate_alt_key), "%P")
-        # zasięg jammera: liczba dodatnia, do 2 miejsc po kropce
         self.v_range_key = (self.register(self._validate_range_key), "%P")
 
         for r, name in enumerate(self.label_names):
             lbl = tk.Label(self.form, text=name, width=28, anchor="e")
 
-            if r == 0:  # Nazwa pliku
+            if r == 0: # Nazwa pliku
                 ent = tk.Entry(self.form, width=40, validate="focusout", validatecommand=self.v_file_focusout)
             elif r == 1:  # Czas próbki (s)
                 ent = tk.Entry(self.form, width=40, validate="key", validatecommand=self.v_sec_key)
@@ -79,10 +75,8 @@ class App(tk.Tk):
             self.entries.append(ent)
             self.row_widgets.append((lbl, ent))
 
-        # OFF: nazwa + czas + 3 startowe = 5 pól
         self.update_input_visibility(5)
 
-        # ===== TRYBY =====
         tk.Label(self.root_frame, text="Wybierz tryb:", font=("Arial", 10, "bold"))\
             .grid(row=2, column=0, pady=(12,4), sticky="w")
 
@@ -129,16 +123,13 @@ class App(tk.Tk):
         # Początkowo ukrywamy sekcję jammera
         self.jammer_frame.grid_remove()
 
-        # ===== START =====
         tk.Button(self.root_frame, text="START", bg="#4CAF50", fg="white",
                   font=("Arial", 11, "bold"), width=15,
                   command=self.on_start).grid(row=5, column=0, pady=24, sticky="w")
 
-        # ---- KONFIG: zakresy (łatwo zmienisz) ----
+        # ---- KONFIG: zakresy 
         self.ALT_MIN = -500.0
         self.ALT_MAX = 20000.0
-
-    # ---------- WALIDATORY (na klawisz / focusout) ----------
 
     def _validate_lat_key(self, P: str) -> bool:
         """LAT: dopuszcza -?, do 2 cyfr + opcjonalna . i do 7 miejsc po kropce (format); zakres sprawdzimy później."""
@@ -172,8 +163,6 @@ class App(tk.Tk):
             return True
         return P.lower().endswith(".bin")
 
-    # ---------- LOGIKA UI ----------
-
     def toggle_ruchomy(self):
         self.is_ruchomy.set(not self.is_ruchomy.get())
         if self.is_ruchomy.get():
@@ -188,16 +177,13 @@ class App(tk.Tk):
 
     def update_fields_visibility(self):
         """Aktualizuje widoczność pól w zależności od trybu i stanu ruchomy"""
-        base_count = 5  # nazwa + czas + 3 podstawowe pola (lon, lat, alt)
+        base_count = 5  
         
-        # Dodaj pola końcowe jeśli ruchomy = TAK
         if self.is_ruchomy.get():
-            base_count = 8  # + 3 pola końcowe
-        
-        # Aktualizuj główne pola
+            base_count = 8 
+
         self.update_input_visibility(base_count)
-        
-        # Pokaż/ukryj sekcję jammera
+
         if self.mode_var.get() == "B":  # Jammer
             self.jammer_frame.grid()
         else:
@@ -211,8 +197,6 @@ class App(tk.Tk):
             else:
                 lbl.grid_remove()
                 ent.grid_remove()
-
-    # ---------- START + WALIDACJA KOŃCOWA ----------
 
     def on_start(self):
         base_count = 8 if self.is_ruchomy.get() else 5
@@ -229,19 +213,16 @@ class App(tk.Tk):
         idx_lat_end   = 6
         idx_alt_end   = 7
 
-        # Pobierz wartości jammera jeśli tryb Jammer
         jammer_values = []
         if mode == "B":
             jammer_values = [entry.get().strip() for entry in self.jammer_entries]
 
-        # --- Nazwa pliku ---
         filename = values[idx_filename]
         if not filename or not filename.lower().endswith(".bin"):
             messagebox.showerror("Błąd", "Nazwa pliku musi kończyć się na .bin")
             self.entries[idx_filename].focus_set()
             return
 
-        # --- Czas ---
         sec_txt = values[idx_seconds]
         if not sec_txt.isdigit():
             messagebox.showerror("Błąd", "Czas próbki (s) musi być liczbą całkowitą.")
@@ -253,7 +234,6 @@ class App(tk.Tk):
             self.entries[idx_seconds].focus_set()
             return
 
-        # --- LON/LAT/ALT start ---
         if not self._lon_in_range(values[idx_lon_start]):
             messagebox.showerror("Błąd", "Długość geograficzna (start) musi być w zakresie −180..180, max 7 miejsc po przecinku.")
             self.entries[idx_lon_start].focus_set()
@@ -267,7 +247,6 @@ class App(tk.Tk):
             self.entries[idx_alt_start].focus_set()
             return
 
-        # --- LON/LAT/ALT end (jeśli widoczne) ---
         if self.is_ruchomy.get():
             if not self._lon_in_range(values[idx_lon_end]):
                 messagebox.showerror("Błąd", "Długość geograficzna (końcowa) musi być w zakresie −180..180, max 7 miejsc po przecinku.")
@@ -282,7 +261,6 @@ class App(tk.Tk):
                 self.entries[idx_alt_end].focus_set()
                 return
 
-        # --- Pola jammera (jeśli tryb Jammer) ---
         if mode == "B":  # Jammer
             if not self._lon_in_range(jammer_values[0]):  # Długość geograficzna jammera
                 messagebox.showerror("Błąd", "Długość geograficzna jammera musi być w zakresie −180..180, max 7 miejsc po przecinku.")
@@ -305,10 +283,47 @@ class App(tk.Tk):
         if mode == "B" and jammer_values:
             message += f"Jammer: {jammer_values}\n"
         
-        messagebox.showinfo("Start", message)
+            # Zbuduj argumenty dla skryptu trybu A/B/C (jeśli ich używasz)
+        mode_args = [
+            "--filename", values[idx_filename],
+            "--seconds",  str(seconds),
+            "--lon",      values[idx_lon_start],
+            "--lat",      values[idx_lat_start],
+            "--alt",      values[idx_alt_start],
+        ]
 
-    # ---------- Funkcje pomocnicze (dokładniejsze sprawdzanie) ----------
+        if mode == "B":  # Jammer
+            mode_args += [
+                "--jammer-lon",   self.jammer_entries[0].get().strip(),
+                "--jammer-lat",   self.jammer_entries[1].get().strip(),
+                "--jammer-range", self.jammer_entries[2].get().strip(),
+            ]
 
+        trajectory_path = None
+        if self.is_ruchomy.get():
+            trajectory_path = self.run_generate_trajectory(
+                start_lat=values[idx_lat_start],
+                start_lon=values[idx_lon_start],
+                start_alt=values[idx_alt_start],
+                end_lat=values[idx_lat_end],
+                end_lon=values[idx_lon_end],
+                end_alt=values[idx_alt_end],
+                duration_s=seconds,
+                step_s=0.1,
+                out_file="traj.csv"
+            )
+            if trajectory_path is None:
+                return  # błąd generowania trajektorii
+
+            # <<< DOPNIJ TRAJEKTORIĘ DO ARGUMENTÓW >>>
+            mode_args += ["--trajectory", trajectory_path]
+
+        # Tu już BEZ keyword argumentu:
+        self.run_mode_script(mode, mode_args)
+
+
+
+    # pomocnicze
     def _has_max_7_decimals(self, s: str) -> bool:
         if "." in s:
             frac = s.split(".", 1)[1]
@@ -349,7 +364,7 @@ class App(tk.Tk):
             return False
 
     def _range_in_range(self, text: str) -> bool:
-        """Zasięg jammera: liczba dodatnia > 0 i <= 100"""
+        """Zasięg jammera: musi byc 0-100m"""
         try:
             if text.strip() == "":
                 return False
@@ -357,6 +372,65 @@ class App(tk.Tk):
             return 0.0 < val <= 100.0
         except ValueError:
             return False
+
+    def run_mode_script(self,mode, args):
+        # odpala skrypty na podstawie wybranego trybu
+        scripts = {
+            "A": "mode_a.py",
+            "B": "mode_b.py",
+            "C": "mode_c.py"
+        }
+
+        script_name = scripts.get(mode)
+
+        if not script_name:
+            messagebox.showerror("Błąd", "Nieznany tryb!")
+            return
+
+        script_path = os.path.join(os.path.dirname(__file__), script_name)
+        if not os.path.isfile(script_path):
+            messagebox.showerror("Błąd", f"Nie znaleziono skryptu: {script_name}")
+            return
+
+        cmd = [sys.executable, script_path] + args
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            messagebox.showerror("Błąd", f"Błąd podczas uruchamiania skryptu: {e}")
+
+    def run_generate_trajectory(self, start_lat, start_lon, start_alt,
+                                end_lat, end_lon, end_alt,
+                                duration_s, step_s=1, out_file="traj.csv"):
+        """
+        Odpala generate_trajectory.py z parametrami z GUI.
+        Zakładam, że generate_trajectory.py przyjmuje argumenty:
+        --start-lat --start-lon --start-alt --end-lat --end-lon --end-alt
+        --duration --step --out
+        """
+        script_path = os.path.join(os.path.dirname(__file__), "generate_trajectory.py")
+        if not os.path.isfile(script_path):
+            messagebox.showerror("Błąd", "Nie znaleziono generate_trajectory.py")
+            return None
+
+        cmd = [
+            sys.executable, script_path,
+            "--start-lat", str(start_lat),
+            "--start-lon", str(start_lon),
+            "--start-alt", str(start_alt),
+            "--end-lat",   str(end_lat),
+            "--end-lon",   str(end_lon),
+            "--end-alt",   str(end_alt),
+            "--duration",  str(duration_s),
+            "--step",      str(step_s),
+            "--out",       out_file
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            messagebox.showinfo("Trajektoria OK", f"Wygenerowano {out_file}.\n\n{res.stdout}")
+            return out_file
+        except subprocess.CalledProcessError as e:
+            messagebox.showerror("Błąd trajektorii", f"generate_trajectory.py zwrócił błąd:\n{e.stderr}")
+            return None
 
 
 if __name__ == "__main__":
