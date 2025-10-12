@@ -436,7 +436,7 @@ class App(tk.Tk):
                                 duration_s, step_s=1, out_file="traj.csv"):
         """
         Odpala generate_trajectory.py z parametrami z GUI.
-        Zakładam, że generate_trajectory.py przyjmuje argumenty:
+        generate_trajectory.py przyjmuje argumenty:
         --start-lat --start-lon --start-alt --end-lat --end-lon --end-alt
         --duration --step --out
         """
