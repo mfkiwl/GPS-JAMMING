@@ -131,6 +131,10 @@ class App(tk.Tk):
         self.ALT_MIN = -500.0
         self.ALT_MAX = 20000.0
 
+        self.set_basic_defaults()
+
+
+
     def _validate_lat_key(self, P: str) -> bool:
         """LAT: dopuszcza -?, do 2 cyfr + opcjonalna . i do 7 miejsc po kropce (format); zakres sprawdzimy później."""
         if P == "":
@@ -197,6 +201,35 @@ class App(tk.Tk):
             else:
                 lbl.grid_remove()
                 ent.grid_remove()
+
+    def set_basic_defaults(self):
+        """Ustawia domyślne wartości w polach formularza"""
+        defaults = [
+            "test.bin",     # Nazwa pliku (.bin)
+            "120",          # Czas próbki (s)
+            "50.0263760",   # Długość geograficzna (start)
+            "19.944750",    # Szerokość geograficzna (start)
+            "350.0",        # Wysokość (start)
+            "50.0863760",   # Długość geograficzna (koniec) - używane gdy "Ruchomy"
+            "19.444750",    # Szerokość geograficzna (koniec)
+            "420.0",       # Wysokość (koniec)
+        ]
+        for i, val in enumerate(defaults):
+            # wstaw tylko do istniejących, widoczność nie ma znaczenia
+            if i < len(self.entries):
+                self.entries[i].delete(0, tk.END)
+                self.entries[i].insert(0, val)
+
+        # domyślne dla jammera (jeśli tryb B)
+        jammer_defaults = [
+            "50.0263760",  # Długość geograficzna jammera
+            "19.644750",   # Szerokość geograficzna jammera
+            "10"           # Zasięg jammera [m]
+        ]
+        for i, val in enumerate(jammer_defaults):
+            if i < len(self.jammer_entries):
+                self.jammer_entries[i].delete(0, tk.END)
+                self.jammer_entries[i].insert(0, val)
 
     def on_start(self):
         base_count = 8 if self.is_ruchomy.get() else 5
