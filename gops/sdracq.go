@@ -7,8 +7,25 @@ import (
 	"math"
 	"time"
 	"fmt"
+	"sync"
 	// "os"
 )
+
+// Global FFT planner cache
+var fftPlanners = make(map[int]*fourier.CmplxFFT)
+var fftMutex sync.Mutex
+
+func getFFTPlanner(size int) *fourier.CmplxFFT {
+	fftMutex.Lock()
+	defer fftMutex.Unlock()
+	
+	if planner, exists := fftPlanners[size]; exists {
+		return planner
+	}
+	
+	fftPlanners[size] = fourier.NewCmplxFFT(size)
+	return fftPlanners[size]
+}
 
 // SDR acquisition function
 func SdrAcquisition(ini *SdrIni, sdrstat *SdrStat, sdr *SdrCh, power []float64) uint64 {
@@ -41,7 +58,7 @@ func SdrAcquisition(ini *SdrIni, sdrstat *SdrStat, sdr *SdrCh, power []float64) 
 		sdr.Trk.CodeFreq = sdr.CRate
 	} else {
 		SDRPRINTF("SdrAcquisition: PRN %d not acquired.\n", sdr.Prn)
-		Sleepms(ACQSLEEP)
+		time.Sleep(time.Duration(ACQSLEEP) * time.Millisecond)
 	}
 	return buffloc
 }
@@ -76,8 +93,15 @@ func CheckAcquisition(P []float64, sdr *SdrCh) bool {
 	// 	   os.Exit(1)
 	//    }
 
-       fmt.Printf("CheckAcquisition: maxP=%.2e, maxP2=%.2e, peakR=%.3f, Cn0=%.2f, threshold=%.3f, codei=%d, freqi=%d\n", 
-                  maxP, maxP2, sdr.Acq.PeakR, sdr.Acq.Cn0, ACQTH, codei, freqi)
+       fmt.Printf("CheckAcquisition PRN %d: maxP=%.2e, maxP2=%.2e, peakR=%.3f, Cn0=%.2f, threshold=%.3f, pass=%v\n", 
+                  sdr.Prn, maxP, maxP2, sdr.Acq.PeakR, sdr.Acq.Cn0, ACQTH, sdr.Acq.PeakR > ACQTH)
+       
+       // Special attention to original working PRNs
+       if sdr.Prn == 12 || sdr.Prn == 13 || sdr.Prn == 15 || sdr.Prn == 17 || sdr.Prn == 19 {
+           fmt.Printf("*** ORIGINAL WORKING PRN %d: peakR=%.3f vs threshold=%.3f ***\n", 
+                      sdr.Prn, sdr.Acq.PeakR, ACQTH)
+       }
+       
        return sdr.Acq.PeakR > ACQTH
 }
 
@@ -224,4 +248,4 @@ func toFloat64Slice(in []complex64) []float64 {
 // Sleepms: uśpienie w milisekundach
 func Sleepms(ms int) {
 	time.Sleep(time.Duration(ms) * time.Millisecond)
-	}
+}

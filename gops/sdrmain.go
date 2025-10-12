@@ -69,25 +69,97 @@ func openHandles() {
 func syncThread(arg interface{}) {
     // Copy tracking data, compute pseudorange, update observation vectors
     for sdrstat.StopFlag == 0 {
-        hobsmtx.Lock()
+        hobsvecmtx.Lock()
+        
+        // Copy tracking data to ObsV like original C code
         for i := 0; i < sdrini.Nch; i++ {
             ch := &sdrch[i]
-            // Safe copy SNR and pseudorange to ObsV
-            snr := 0.0
-            el := 0.0
-            if len(ch.Trk.S) > 0 {
-                snr = ch.Trk.S[0]
-            }
-            if len(ch.Trk.L) > 0 {
-                el = ch.Trk.L[0]
-            }
-            if len(sdrstat.ObsV) > i*11+1 {
-                sdrstat.ObsV[i*11+0] = snr
-                sdrstat.ObsV[i*11+1] = el
+            
+            // Check if this channel has good tracking (temporarily ignore ephemeris for testing)
+            if ch.FlagTrk == 1 && ch.FlagAcq == 1 && len(ch.Trk.S) > 0 {
+                prn := ch.Prn
+                
+                // Make sure ObsV is large enough
+                if len(sdrstat.ObsV) <= (prn-1)*11+10 {
+                    newSize := prn*11 + 11
+                    newObsV := make([]float64, newSize)
+                    copy(newObsV, sdrstat.ObsV)
+                    sdrstat.ObsV = newObsV
+                }
+                
+                // Fill observation data like original C code
+                sdrstat.ObsV[(prn-1)*11+0] = float64(prn)  // PRN
+                sdrstat.ObsV[(prn-1)*11+1] = 1             // Validity flag
+                
+                // Pseudorange (simplified - needs proper calculation)
+                if len(ch.Trk.CodeI) > 0 {
+                    sdrstat.ObsV[(prn-1)*11+5] = float64(ch.Trk.CodeI[0]) * CLIGHT * ch.Ti  // PR (simplified)
+                }
+                
+                // Time of week (simplified)
+                if len(ch.Trk.Tow) > 0 {
+                    sdrstat.ObsV[(prn-1)*11+6] = ch.Trk.Tow[0]  // TOW
+                }
+                
+                // GPS week (from nav data)
+                sdrstat.ObsV[(prn-1)*11+7] = float64(ch.Nav.SdrEph.WeekGpst)  // GPS week
+                
+                // SNR
+                if len(ch.Trk.S) > 0 {
+                    sdrstat.ObsV[(prn-1)*11+8] = ch.Trk.S[0]  // SNR
+                }
+                
+                // Elevation (if available)
+                if len(ch.Trk.L) > 0 {
+                    sdrstat.ObsV[(prn-1)*11+10] = ch.Trk.L[0]  // Elevation
+                }
+                
+                fmt.Printf("syncThread: Set obs for PRN %d, SNR=%.1f, valid=1\n", prn, ch.Trk.S[0])
             }
         }
-        hobsmtx.Unlock()
-        time.Sleep(10 * time.Millisecond)
+        hobsvecmtx.Unlock()
+        
+        // Call PVT processing like in original C code
+        ret := updateObsList()
+        if ret == 0 {
+            precheckObs()
+            
+            mlock(&hobsvecmtx)
+            nsat := sdrstat.NsatValid
+            unmlock(&hobsvecmtx)
+            
+            fmt.Printf("syncThread: Found %d valid satellites\n", nsat)
+            
+            if nsat >= 4 {
+                ret := pvtProcessor()
+                if ret != 0 {
+                    fmt.Println("errorDetected: exiting pvtProcessor")
+                } else {
+                    // Print coordinates when PVT solution is successful
+                    mlock(&hobsvecmtx)
+                    lat := sdrstat.Lat
+                    lon := sdrstat.Lon
+                    hgt := sdrstat.Hgt
+                    gdop := sdrstat.Gdop
+                    unmlock(&hobsvecmtx)
+                    
+                    fmt.Printf("=== POSITION SOLUTION ===\n")
+                    fmt.Printf("Latitude:  %.8f°\n", lat)
+                    fmt.Printf("Longitude: %.8f°\n", lon)
+                    fmt.Printf("Height:    %.3f m\n", hgt)
+                    fmt.Printf("GDOP:      %.2f\n", gdop)
+                    fmt.Printf("Satellites: %d\n", nsat)
+                    fmt.Printf("=========================\n")
+                    os.Exit(0)
+                }
+            } else {
+                if nsat > 0 {
+                    fmt.Printf("pvtProcessor: PVT not solved for, less than four SVs (have %d)\n", nsat)
+                }
+            }
+        }
+        
+        time.Sleep(100 * time.Millisecond)  // Slower for debugging
     }
     fmt.Println("SDR syncthread finished!")
 }
@@ -95,15 +167,64 @@ func syncThread(arg interface{}) {
 // sdrThread: translated from C sdrthread
 func sdrThread(arg interface{}) {
     sdr := arg.(*SdrCh)
+    fmt.Printf("SDRTHREAD START: PRN %d\n", sdr.Prn)
     var buffloc uint64
     var acqpower []float64
+    var loopcnt uint64
+    var cnt uint64
+    
     for sdrstat.StopFlag == 0 {
         if sdr.FlagAcq == 0 {
             acqpower = make([]float64, sdr.NSamp*sdr.Acq.Nfreq)
             buffloc = SdrAcquisition(&sdrini, &sdrstat, sdr, acqpower)
         }
         if sdr.FlagAcq != 0 {
-            sdrtracking(sdr, buffloc, 0)
+            fmt.Printf("BEFORE TRACKING: PRN %d, FlagAcq=%d, FlagTrk=%d\n", sdr.Prn, sdr.FlagAcq, sdr.FlagTrk)
+            sdrtracking(sdr, buffloc, cnt)
+            fmt.Printf("AFTER TRACKING: PRN %d, FlagTrk=%d\n", sdr.Prn, sdr.FlagTrk)
+            
+            // Tracking and SNR calculation logic
+            if sdr.FlagTrk != 0 {
+                fmt.Printf("DEBUG TRK: PRN %d, FlagSync=%d, SwLoop=%d\n", sdr.Prn, sdr.Nav.FlagSync, sdr.Nav.SwLoop)
+                cumsumcorr(&sdr.Trk, int(sdr.Nav.OCode[sdr.Nav.OCodeI]))
+                sdr.Trk.FlagLoopFilter = 0
+                if sdr.Nav.FlagSync == 0 && sdr.Nav.SwLoop == 0 {
+                    fmt.Printf("DEBUG LOOP: PRN %d, FlagSync=0, SwLoop=0 - using Prm1\n", sdr.Prn)
+                    pll(sdr, &sdr.Trk.Prm1, sdr.CTime)
+                    dll(sdr, &sdr.Trk.Prm1, sdr.CTime)
+                    sdr.Trk.FlagLoopFilter = 1
+                } else if sdr.Nav.SwLoop != 0 {
+                    fmt.Printf("DEBUG LOOP: PRN %d, SwLoop=%d - entering SNR section (FlagSync=%d)\n", sdr.Prn, sdr.Nav.SwLoop, sdr.Nav.FlagSync)
+                    pll(sdr, &sdr.Trk.Prm2, float64(sdr.Trk.LoopMs)/1000)
+                    dll(sdr, &sdr.Trk.Prm2, float64(sdr.Trk.LoopMs)/1000)
+                    sdr.Trk.FlagLoopFilter = 1
+                    
+                    // SNR calculation timing - INSIDE SwLoop block
+                    modVal := uint64(SNSMOOTHMS)/uint64(sdr.Trk.LoopMs)
+                    condition := loopcnt%modVal == 0
+                    fmt.Printf("DEBUG SNR TIMING: PRN %d, loopcnt=%d, modVal=%d, condition=%t, SNSMOOTHMS=%d, LoopMs=%d\n", 
+                        sdr.Prn, loopcnt, modVal, condition, SNSMOOTHMS, sdr.Trk.LoopMs)
+                    if condition {
+                        fmt.Printf("DEBUG SNR: PRN %d, loopcnt=%d, condition met - calling setobsdata with snrflag=1\n", sdr.Prn, loopcnt)
+                        setobsdata(sdr, buffloc, loopcnt, &sdr.Trk, 1)
+                        fmt.Printf("DEBUG SNR calculated: PRN %d, SNR=%.2f\n", sdr.Prn, sdr.Trk.S[0])
+                    } else {
+                        setobsdata(sdr, buffloc, loopcnt, &sdr.Trk, 0)
+                    }
+                    loopcnt++
+                } else {
+                    fmt.Printf("DEBUG LOOP: PRN %d, FlagSync=1, SwLoop=0 - no SNR calculation\n", sdr.Prn)
+                }
+                
+                // Clear cumsum if loop filter was used (like in original C)
+                if sdr.Trk.FlagLoopFilter != 0 {
+                    clearcumsumcorr(&sdr.Trk)
+                }
+                
+                // Increment cnt like in original C code
+                cnt++
+                buffloc += uint64(sdr.CurrNSamp)
+            }
         }
         time.Sleep(10 * time.Millisecond)
     }
@@ -138,6 +259,7 @@ func startsdr() {
         quitsdr(&sdrini, 1)
         return
     }
+    
     // Initialize SDR channel struct
     for i := 0; i < sdrini.Nch; i++ {
         err := InitSdrCh(i+1, sdrini.Sys[i], sdrini.Prn[i], sdrini.Ctype[i],
@@ -263,6 +385,7 @@ func unmlock(mtx *sync.Mutex) {
 
 func sdrthread(arg interface{}) interface{} {
     sdr := arg.(*SdrCh)
+    fmt.Printf("SDRTHREAD START: PRN %d\n", sdr.Prn)
     var buffloc, bufflocnow, cnt, loopcnt uint64
     var acqpower []float64
     var snr, el float64
@@ -271,6 +394,7 @@ func sdrthread(arg interface{}) interface{} {
     var elapsedAcqTime float64
     sleepms(sdr.No * 500)
     for sdrstat.StopFlag == 0 {
+        loopStart := time.Now()
         currentTime := time.Now()
         if sdr.FlagAcq != 0 {
             elapsedAcqTime = currentTime.Sub(startAcqTimer).Seconds()
@@ -326,12 +450,22 @@ func sdrthread(arg interface{}) interface{} {
         // Acquisition
         if sdr.FlagAcq == 0 {
             acqpower = make([]float64, sdr.NSamp*sdr.Acq.Nfreq)
+            acqStart := time.Now()
             buffloc = SdrAcquisition(&sdrini, &sdrstat, sdr, acqpower)
+            acqTime := time.Since(acqStart).Seconds()
+            if acqTime > 0.1 { // Log slow acquisitions
+                fmt.Printf("SLOW ACQ: PRN %d took %.3f seconds\n", sdr.Prn, acqTime)
+            }
             startAcqTimer = time.Now()
         }
         // Tracking
         if sdr.FlagAcq != 0 {
+            trkStart := time.Now()
             bufflocnow = sdrtracking(sdr, buffloc, cnt)
+            trkTime := time.Since(trkStart).Seconds()
+            if trkTime > 0.01 { // Log tracking longer than 10ms
+                fmt.Printf("SLOW TRK: PRN %d took %.3f seconds\n", sdr.Prn, trkTime)
+            }
             if sdr.FlagTrk != 0 {
                 cumsumcorr(&sdr.Trk, int(sdr.Nav.OCode[sdr.Nav.OCodeI]))
                 sdr.Trk.FlagLoopFilter = 0
@@ -340,11 +474,14 @@ func sdrthread(arg interface{}) interface{} {
                     dll(sdr, &sdr.Trk.Prm1, sdr.CTime)
                     sdr.Trk.FlagLoopFilter = 1
                 } else if sdr.Nav.SwLoop != 0 {
+                    // Normal SwLoop condition without forced debugging
                     pll(sdr, &sdr.Trk.Prm2, float64(sdr.Trk.LoopMs)/1000)
                     dll(sdr, &sdr.Trk.Prm2, float64(sdr.Trk.LoopMs)/1000)
                     sdr.Trk.FlagLoopFilter = 2
                     mlock(&hobsmtx)
-                    if loopcnt%uint64(SNSMOOTHMS/sdr.Trk.LoopMs) == 0 {
+                    modVal := uint64(SNSMOOTHMS/sdr.Trk.LoopMs)
+                    condition := loopcnt%modVal == 0
+                    if condition {
                         setobsdata(sdr, buffloc, cnt, &sdr.Trk, 1)
                     } else {
                         setobsdata(sdr, buffloc, cnt, &sdr.Trk, 0)
@@ -360,6 +497,10 @@ func sdrthread(arg interface{}) interface{} {
             }
         }
         sdr.Trk.BuffLoc = buffloc
+        loopTime := time.Since(loopStart).Seconds()
+        if loopTime > 0.001 { // Log loops longer than 1ms
+            fmt.Printf("SLOW LOOP: PRN %d took %.3f seconds\n", sdr.Prn, loopTime)
+        }
     }
     if sdr.FlagAcq != 0 {
         SDRPRINTF("SDR channel %s thread finished! Delay=%d [ms]\n", sdr.SatStr, int((bufflocnow-buffloc)/uint64(sdr.NSamp)))

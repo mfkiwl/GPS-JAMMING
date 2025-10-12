@@ -5,7 +5,6 @@ package main
 import (
 	"os"
 	"errors"
-	"gonum.org/v1/gonum/dsp/fourier"
 )
 
 // Load initial value
@@ -134,6 +133,20 @@ func InitTrkStruct(sat, ctype int, ctime float64, trk *SdrTrk, ini *SdrIni) erro
 	trk.SumQ = make([]float64, 1+2*trkcorrn)
 	trk.OldSumI = make([]float64, 1+2*trkcorrn)
 	trk.OldSumQ = make([]float64, 1+2*trkcorrn)
+	
+	// Initialize ISum and counter
+	trk.ISum = 0
+	trk.ISumCount = 0
+	
+	// Initialize observation arrays with OBSINTERPN size
+	trk.S = make([]float64, OBSINTERPN)
+	trk.CodeISum = make([]uint64, OBSINTERPN)
+	trk.Tow = make([]float64, OBSINTERPN)
+	trk.L = make([]float64, OBSINTERPN)
+	trk.D = make([]float64, OBSINTERPN)
+	trk.CodeI = make([]uint64, OBSINTERPN)
+	trk.CntOut = make([]uint64, OBSINTERPN)
+	trk.RemCOut = make([]float64, OBSINTERPN)
 	if ctype == CTYPE_L1CA {
 		trk.Loop = LOOP_L1CA
 	}
@@ -196,6 +209,8 @@ func FreeSdrCh(sdr *SdrCh) {
 	sdr.Trk.SumQ = nil
 	sdr.Trk.OldSumI = nil
 	sdr.Trk.OldSumQ = nil
+	sdr.Trk.S = nil
+	sdr.Trk.CodeISum = nil
 	sdr.Trk.CorrP = nil
 	sdr.Acq.Freq = nil
 	sdr.Nav.OCode = nil
@@ -234,7 +249,7 @@ func InitSdrCh(chno, sys, prn, ctype, dtype, ftype, f_gain, f_bias, f_clock int,
 	}
 	// Acquisition struct
 	InitAcqStruct(sys, ctype, prn, &sdr.Acq)
-	sdr.Acq.Nfft = 2 * sdr.NSamp
+	sdr.Acq.Nfft = 2 * sdr.NSamp  // ORIGINAL C VALUE: nfft=2*nsamp for proper FFT zero padding
 	sdr.Acq.Freq = make([]float64, sdr.Acq.Nfreq)
 	for i := 0; i < sdr.Acq.Nfreq; i++ {
 		sdr.Acq.Freq[i] = sdr.FIf + float64(i-(sdr.Acq.Nfreq-1)/2)*sdr.Acq.Step + sdr.FOffset
@@ -260,7 +275,7 @@ func InitSdrCh(chno, sys, prn, ctype, dtype, ftype, f_gain, f_bias, f_clock int,
 	}
 	// FFT
 	// cpxfft equivalent in Go using gonum.org/v1/gonum/fourier
-	fft := fourier.NewCmplxFFT(len(sdr.XCode))
+	fft := getFFTPlanner(len(sdr.XCode))  // Use cached FFT planner from sdracq.go
 	xcode128 := make([]complex128, len(sdr.XCode))
 	for i := range sdr.XCode {
 		xcode128[i] = complex(float64(real(sdr.XCode[i])), float64(imag(sdr.XCode[i])))

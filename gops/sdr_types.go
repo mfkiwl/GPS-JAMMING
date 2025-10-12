@@ -143,6 +143,7 @@ type SdrTrk struct {
 	OldSumI     []float64
 	OldSumQ     []float64
 	ISum        float64
+	ISumCount   int       // Debug counter for ISum accumulations
 	Loop        int
 	LoopMs      int
 	FlagPolarityAdd int
@@ -157,9 +158,45 @@ type SdrTrk struct {
 	Prm2        SdrTrkPrm
 }
 
+// GPS ephemeris structure (based on rtklib eph_t)
+type EphGPS struct {
+	Sat         int       // satellite number
+	Iode        int       // IODE
+	Iodc        int       // IODC
+	Sva         int       // SV accuracy (URA index)
+	Svh         int       // SV health (0:ok)
+	Week        int       // GPS week
+	Code        int       // code on L2
+	Flag        int       // L2 P data flag
+	Toe         float64   // time of ephemeris (GPS time)
+	Toc         float64   // reference time of clock (GPS time)
+	Ttr         float64   // transmission time
+	A           float64   // semi-major axis (m)
+	E           float64   // eccentricity
+	I0          float64   // inclination angle at reference time (rad)
+	OMG0        float64   // longitude of ascending node at reference time (rad)
+	Omg         float64   // argument of perigee (rad)
+	M0          float64   // mean anomaly at reference time (rad)
+	Deln        float64   // mean motion difference from computed value (rad/s)
+	OMGd        float64   // rate of right ascension (rad/s)
+	Idot        float64   // rate of inclination angle (rad/s)
+	Crc         float64   // amplitude of cosine harmonic correction term to orbit radius (m)
+	Crs         float64   // amplitude of sine harmonic correction term to orbit radius (m)
+	Cuc         float64   // amplitude of cosine harmonic correction term to argument of latitude (rad)
+	Cus         float64   // amplitude of sine harmonic correction term to argument of latitude (rad)
+	Cic         float64   // amplitude of cosine harmonic correction term to angle of inclination (rad)
+	Cis         float64   // amplitude of sine harmonic correction term to angle of inclination (rad)
+	Toes        float64   // Toe (s) in week
+	Fit         float64   // fit interval (h)
+	F0          float64   // SV clock bias (s)
+	F1          float64   // SV clock drift (s/s)
+	F2          float64   // SV clock drift rate (s/s^2)
+	Tgd         [4]float64 // group delay parameters (s)
+}
+
 type SdrEph struct {
-	// eph_t z rtklib.h, tu jako interface{} do czasu implementacji
-	Eph        interface{}
+	// GPS ephemeris data
+	Eph        EphGPS
 	Ctype      int
 	TowGpst    float64
 	WeekGpst   int
@@ -215,6 +252,7 @@ type SdrNav struct {
 	FlagSyncF   int
 	FlagTow     int
 	FlagDec     int
+	TotalBitCollections int  // Track total bit collections for debugging
 	SdrEph      SdrEph
 	Sbas        SdrSbas
 }

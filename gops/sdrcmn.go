@@ -40,13 +40,21 @@ func MeanVD(data []float64, n int, exinds, exinde int) float64 {
 func MaxVI(data []int, exinds, exinde int) (max int, ind int) {
 	max = data[0]
 	ind = 0
-	for i := 1; i < len(data); i++ {
-		if (exinds <= exinde && (i < exinds || i > exinde)) ||
-			(exinds > exinde && (i < exinds && i > exinde)) {
-			if max < data[i] {
-				max = data[i]
-				ind = i
+	for i := 0; i < len(data); i++ {
+		// exinds=exinde=-1 means use all data (no exclusions)
+		shouldCheck := true
+		if exinds != -1 || exinde != -1 {
+			if exinds <= exinde {
+				// Normal range exclusion: exclude indices between exinds and exinde
+				shouldCheck = (i < exinds || i > exinde)
+			} else {
+				// Wraparound range exclusion
+				shouldCheck = (i < exinds && i > exinde)
 			}
+		}
+		if shouldCheck && max < data[i] {
+			max = data[i]
+			ind = i
 		}
 	}
 	return
@@ -235,16 +243,16 @@ func min(a, b int) int {
 // Mix local carrier (dokładnie zgodnie z kodem C)
 func MixCarr(data []byte, dtype int, ti float64, n int, freq, phi0 float64, II, QQ []int16) float64 {
 	DPI := 2.0 * math.Pi
-	CDIV := 32
-	CMASK := 0x1F
+	CDIV := 16        // SSE2 version uses 16, not 32
+	CMASK := 0x0F     // Mask for 16 (0x0F instead of 0x1F)
 	CSCALE := 1.0 / 32.0
 	
-	// Inicjalizacja tabeli nośnej (zgodnie z C: short floor(cos/sin/CSCALE + 0.5))
-	cost := make([]int16, CDIV)
-	sint := make([]int16, CDIV)
+	// SSE2 version uses int8 table, not int16
+	cost := make([]int8, CDIV)
+	sint := make([]int8, CDIV)
 	for i := 0; i < CDIV; i++ {
-		cost[i] = int16(math.Floor(math.Cos(DPI/float64(CDIV)*float64(i))/CSCALE + 0.5))
-		sint[i] = int16(math.Floor(math.Sin(DPI/float64(CDIV)*float64(i))/CSCALE + 0.5))
+		cost[i] = int8(math.Floor(math.Cos(DPI/float64(CDIV)*float64(i))/CSCALE + 0.5))
+		sint[i] = int8(math.Floor(math.Sin(DPI/float64(CDIV)*float64(i))/CSCALE + 0.5))
 	}
 	
 	phi := phi0 * float64(CDIV) / DPI
@@ -256,8 +264,9 @@ func MixCarr(data []byte, dtype int, ti float64, n int, freq, phi0 float64, II, 
 			// Treat bytes as signed chars like C code does
 			dataI := int8(data[2*i])
 			dataQ := int8(data[2*i+1])
-			II[i] = cost[index]*int16(dataI) - sint[index]*int16(dataQ)
-			QQ[i] = sint[index]*int16(dataI) + cost[index]*int16(dataQ)
+			// Use int8 table values like SSE2 version
+			II[i] = int16(cost[index])*int16(dataI) - int16(sint[index])*int16(dataQ)
+			QQ[i] = int16(sint[index])*int16(dataI) + int16(cost[index])*int16(dataQ)
 			phi += ps
 		}
 	} else if dtype == DTYPEI { // real
@@ -265,8 +274,9 @@ func MixCarr(data []byte, dtype int, ti float64, n int, freq, phi0 float64, II, 
 			index := int(phi) & CMASK
 			// Treat bytes as signed chars like C code does
 			dataVal := int8(data[i])
-			II[i] = cost[index] * int16(dataVal)
-			QQ[i] = sint[index] * int16(dataVal)
+			// Use int8 table values like SSE2 version
+			II[i] = int16(cost[index]) * int16(dataVal)
+			QQ[i] = int16(sint[index]) * int16(dataVal)
 			phi += ps
 		}
 	}
@@ -377,5 +387,31 @@ func dot_22(a1, a2, b1, b2 []float64, n int, d1, d2 []float64) {
 		d1[1] += a1[i] * b2[i]
 		d2[0] += a2[i] * b1[i]
 		d2[1] += a2[i] * b2[i]
+	}
+}
+
+// dot_23_int16: d1={dot(a1,b1),dot(a1,b2),dot(a1,b3)}, d2={dot(a2,b1),dot(a2,b2),dot(a2,b3)} for int16
+func dot_23_int16(a1, a2, b1, b2, b3 []int16, n int, d1, d2 []float64) {
+	d1[0], d1[1], d1[2] = 0, 0, 0
+	d2[0], d2[1], d2[2] = 0, 0, 0
+	for i := 0; i < n; i++ {
+		d1[0] += float64(a1[i]) * float64(b1[i])
+		d1[1] += float64(a1[i]) * float64(b2[i])
+		d1[2] += float64(a1[i]) * float64(b3[i])
+		d2[0] += float64(a2[i]) * float64(b1[i])
+		d2[1] += float64(a2[i]) * float64(b2[i])
+		d2[2] += float64(a2[i]) * float64(b3[i])
+	}
+}
+
+// dot_22_int16: d1={dot(a1,b1),dot(a1,b2)}, d2={dot(a2,b1),dot(a2,b2)} for int16
+func dot_22_int16(a1, a2, b1, b2 []int16, n int, d1, d2 []float64) {
+	d1[0], d1[1] = 0, 0
+	d2[0], d2[1] = 0, 0
+	for i := 0; i < n; i++ {
+		d1[0] += float64(a1[i]) * float64(b1[i])
+		d1[1] += float64(a1[i]) * float64(b2[i])
+		d2[0] += float64(a2[i]) * float64(b1[i])
+		d2[1] += float64(a2[i]) * float64(b2[i])
 	}
 }

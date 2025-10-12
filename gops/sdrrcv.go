@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"sync"
+	"time"
 )
 
 var buffmtx sync.Mutex
@@ -16,6 +17,12 @@ var err error // global error variable for fallback returns
 func RcvInit(ini *SdrIni, sdrstat *SdrStat) error {
 	sdrstat.Buff = nil
 	sdrstat.TmpBuff = nil
+	
+	// Initialize observation arrays
+	sdrstat.ObsV = make([]float64, 32*11)  // 32 satellites * 11 fields each
+	sdrstat.ObsValidList = make([]int, 32) // Maximum 32 satellites
+	sdrstat.NsatValid = 0
+	
 	switch ini.Fend {
 	case FEND_FILE:
 		var err error
@@ -74,7 +81,7 @@ func RcvGrabData(ini *SdrIni, sdrstat *SdrStat) int {
 	switch ini.Fend {
 	case FEND_FILE:
 		FilePushToMemBuf(ini, sdrstat)
-		Sleepms(5)
+		time.Sleep(5 * time.Millisecond)
 	default:
 		return -1
 	}

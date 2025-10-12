@@ -1,5 +1,7 @@
 package main
 
+// import "fmt"  // Disabled for clean output
+
 // Constants for bit scaling (from RTKLIB)
 const (
     P2_31 = 4.656612873077393E-10 // 2^-31
@@ -24,9 +26,15 @@ type GpsTime struct {
     Week int
     Sec  float64
 }
+
 func gpst2time(week int, sec float64) GpsTime {
     // This is a simplified version; original uses epoch2time(gpst0)
     return GpsTime{Week: week, Sec: sec}
+}
+
+func time2gpst(t GpsTime) float64 {
+    // Convert to GPS seconds from epoch
+    return float64(t.Week) * 604800.0 + t.Sec
 }
 
 // Define EphGps struct for GPS ephemeris fields (minimal, expand as needed)
@@ -67,69 +75,59 @@ type EphGps struct {
 func decode_subfrm1(buff []uint8, eph *SdrEph) {
     eph.TowGpst = float64(getbitu(buff, 30, 17)) * 6.0
     week := getbitu(buff, 60, 10) + 1024
-    // The following assumes Eph is a struct with these fields. Type assertion may be needed if Eph is interface{}.
-    ephStruct, ok := eph.Eph.(*EphGps)
-    if !ok {
-        return // or handle error
-    }
-    ephStruct.code = getbitu(buff, 70, 2)
-    ephStruct.sva = getbitu(buff, 72, 4)
-    ephStruct.svh = getbitu(buff, 76, 6)
-    ephStruct.iodc = getbitu2(buff, 82, 2, 210, 8)
-    ephStruct.flag = getbitu(buff, 90, 1)
-    ephStruct.tgd[0] = float64(getbits(buff, 196, 8)) * P2_31
+    // Direct access to Eph structure fields
+    eph.Eph.Code = int(getbitu(buff, 70, 2))
+    eph.Eph.Sva = int(getbitu(buff, 72, 4))
+    eph.Eph.Svh = int(getbitu(buff, 76, 6))
+    eph.Eph.Iodc = int(getbitu2(buff, 82, 2, 210, 8))
+    eph.Eph.Flag = int(getbitu(buff, 90, 1))
+    eph.Eph.Tgd[0] = float64(getbits(buff, 196, 8)) * P2_31
     toc := float64(getbitu(buff, 218, 16)) * 16.0
-    ephStruct.f2 = float64(getbits(buff, 240, 8)) * P2_55
-    ephStruct.f1 = float64(getbits(buff, 248, 16)) * P2_43
-    ephStruct.f0 = float64(getbits(buff, 270, 22)) * P2_31
-    ephStruct.week = adjgpsweek(int(week))
-    eph.WeekGpst = ephStruct.week
-    ephStruct.ttr = gpst2time(ephStruct.week, eph.TowGpst)
-    ephStruct.toc = gpst2time(ephStruct.week, toc)
+    eph.Eph.F2 = float64(getbits(buff, 240, 8)) * P2_55
+    eph.Eph.F1 = float64(getbits(buff, 248, 16)) * P2_43
+    eph.Eph.F0 = float64(getbits(buff, 270, 22)) * P2_31
+    eph.Eph.Week = adjgpsweek(int(week))
+    eph.WeekGpst = eph.Eph.Week
+    ttr := gpst2time(eph.Eph.Week, eph.TowGpst)
+    toc_time := gpst2time(eph.Eph.Week, toc)
+    eph.Eph.Ttr = time2gpst(ttr)
+    eph.Eph.Toc = time2gpst(toc_time)
     eph.Cnt++
 }
 
 func decode_subfrm2(buff []uint8, eph *SdrEph) {
-    ephStruct, ok := eph.Eph.(*EphGps)
-    if !ok {
-        return // or handle error
-    }
-    oldiode := ephStruct.iode
+    oldiode := eph.Eph.Iode
     eph.TowGpst = float64(getbitu(buff, 30, 17)) * 6.0
-    ephStruct.iode = getbitu(buff, 60, 8)
-    ephStruct.crs = float64(getbits(buff, 68, 16)) * P2_5
-    ephStruct.deln = float64(getbits(buff, 90, 16)) * P2_43 * SC2RAD
-    ephStruct.M0 = float64(getbits2(buff, 106, 8, 120, 24)) * P2_31 * SC2RAD
-    ephStruct.cuc = float64(getbits(buff, 150, 16)) * P2_29
-    ephStruct.e = float64(getbitu2(buff, 166, 8, 180, 24)) * P2_33
-    ephStruct.cus = float64(getbits(buff, 210, 16)) * P2_29
+    eph.Eph.Iode = int(getbitu(buff, 60, 8))
+    eph.Eph.Crs = float64(getbits(buff, 68, 16)) * P2_5
+    eph.Eph.Deln = float64(getbits(buff, 90, 16)) * P2_43 * SC2RAD
+    eph.Eph.M0 = float64(getbits2(buff, 106, 8, 120, 24)) * P2_31 * SC2RAD
+    eph.Eph.Cuc = float64(getbits(buff, 150, 16)) * P2_29
+    eph.Eph.E = float64(getbitu2(buff, 166, 8, 180, 24)) * P2_33
+    eph.Eph.Cus = float64(getbits(buff, 210, 16)) * P2_29
     sqrtA := float64(getbitu2(buff, 226, 8, 240, 24)) * P2_19
-    ephStruct.toes = float64(getbitu(buff, 270, 16)) * 16.0
-    ephStruct.fit = getbitu(buff, 286, 1)
-    ephStruct.A = sqrtA * sqrtA
-    if oldiode-ephStruct.iode != 0 {
+    eph.Eph.Toes = float64(getbitu(buff, 270, 16)) * 16.0
+    eph.Eph.Fit = float64(getbitu(buff, 286, 1))
+    eph.Eph.A = sqrtA * sqrtA
+    if oldiode-eph.Eph.Iode != 0 {
         eph.Update = ON
     }
     eph.Cnt++
 }
 
 func decode_subfrm3(buff []uint8, eph *SdrEph) {
-    ephStruct, ok := eph.Eph.(*EphGps)
-    if !ok {
-        return // or handle error
-    }
-    oldiode := ephStruct.iode
+    oldiode := eph.Eph.Iode
     eph.TowGpst = float64(getbitu(buff, 30, 17)) * 6.0
-    ephStruct.cic = float64(getbits(buff, 60, 16)) * P2_29
-    ephStruct.OMG0 = float64(getbits2(buff, 76, 8, 90, 24)) * P2_31 * SC2RAD
-    ephStruct.cis = float64(getbits(buff, 120, 16)) * P2_29
-    ephStruct.i0 = float64(getbits2(buff, 136, 8, 150, 24)) * P2_31 * SC2RAD
-    ephStruct.crc = float64(getbits(buff, 180, 16)) * P2_5
-    ephStruct.omg = float64(getbits2(buff, 196, 8, 210, 24)) * P2_31 * SC2RAD
-    ephStruct.OMGd = float64(getbits(buff, 240, 24)) * P2_43 * SC2RAD
-    ephStruct.iode = getbitu(buff, 270, 8)
-    ephStruct.idot = float64(getbits(buff, 278, 14)) * P2_43 * SC2RAD
-    if oldiode-ephStruct.iode != 0 {
+    eph.Eph.Cic = float64(getbits(buff, 60, 16)) * P2_29
+    eph.Eph.OMG0 = float64(getbits2(buff, 76, 8, 90, 24)) * P2_31 * SC2RAD
+    eph.Eph.Cis = float64(getbits(buff, 120, 16)) * P2_29
+    eph.Eph.I0 = float64(getbits2(buff, 136, 8, 150, 24)) * P2_31 * SC2RAD
+    eph.Eph.Crc = float64(getbits(buff, 180, 16)) * P2_5
+    eph.Eph.Omg = float64(getbits2(buff, 196, 8, 210, 24)) * P2_31 * SC2RAD
+    eph.Eph.OMGd = float64(getbits(buff, 240, 24)) * P2_43 * SC2RAD
+    eph.Eph.Iode = int(getbitu(buff, 270, 8))
+    eph.Eph.Idot = float64(getbits(buff, 278, 14)) * P2_43 * SC2RAD
+    if oldiode-eph.Eph.Iode != 0 {
         eph.Update = ON
     }
     eph.Cnt++
@@ -145,6 +143,7 @@ func decode_subfrm5(buff []uint8, eph *SdrEph) {
 
 func decode_frame_l1ca(buff []uint8, eph *SdrEph) int {
     id := getbitu(buff, 49, 3)
+    // fmt.Printf("DEBUG decode_frame_l1ca: subframe id=%d\n", id)  // Disabled for cleaner output
     switch id {
     case 1:
         decode_subfrm1(buff, eph)
@@ -181,6 +180,38 @@ func paritycheck_l1ca(bits []int) int {
 func decode_l1ca(nav *SdrNav) int {
     id := 0
     bin := make([]uint8, 38)
+    
+    // Disable debug for cleaner output
+    // fmt.Printf("DEBUG decode_l1ca: Flen=%d, AddFlen=%d, TotalBitCollections=%d\n", 
+    //     nav.Flen, nav.AddFlen, nav.TotalBitCollections)
+    
+    // Disable debug for cleaner output
+    // if nav.Flen > 0 {
+    //     fmt.Printf("DEBUG decode_l1ca: First few FBits values: ")
+    //     maxShow := nav.Flen
+    //     if maxShow > 10 {
+    //         maxShow = 10
+    //     }
+    //     for i := 0; i < maxShow; i++ {
+    //         fmt.Printf("%d ", nav.FBits[i])
+    //     }
+    //     fmt.Printf("\n")
+    //     
+    //     // Check middle of buffer too
+    //     midStart := nav.Flen / 2
+    //     fmt.Printf("DEBUG decode_l1ca: Middle FBits values [%d-%d]: ", midStart, midStart+9)
+    //     for i := midStart; i < midStart+10 && i < nav.Flen; i++ {
+    //         fmt.Printf("%d ", nav.FBits[i])
+    //     }
+    //     fmt.Printf("\n")
+    //     
+    //     fmt.Printf("DEBUG decode_l1ca: First few FBitsDec values: ")
+    //     for i := 0; i < maxShow; i++ {
+    //         fmt.Printf("%d ", nav.FBitsDec[i])
+    //     }
+    //     fmt.Printf("\n")
+    // }
+    
     for i := 0; i < 10; i++ {
         if nav.FBitsDec[i*30+1] == -1 {
             for j := 2; j < 26; j++ {
@@ -190,5 +221,8 @@ func decode_l1ca(nav *SdrNav) int {
     }
     bits2byte(nav.FBitsDec[nav.AddFlen:], nav.Flen, 38, 0, bin)
     id = decode_frame_l1ca(bin, &nav.SdrEph)
+    
+    // Disable debug for cleaner output  
+    // fmt.Printf("DEBUG decode_l1ca: decode_frame_l1ca returned id=%d\n", id)
     return id
 }
