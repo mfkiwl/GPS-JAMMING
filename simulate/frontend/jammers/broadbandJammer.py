@@ -44,7 +44,7 @@ class broadbandJammer(gr.top_block):
         ##################################################
 
         self.blocks_head_0 = blocks.head(gr.sizeof_char*1, (num_samp * 2))
-        self.blocks_file_sink_0 = blocks.file_sink(gr.sizeof_char*1, '/home/szymon/Downloads/GPS_JAMMING/GPS-JAMMING/simulate/frontend/jammers/jammer_file.bin', False)
+        self.blocks_file_sink_0 = blocks.file_sink(gr.sizeof_char*1, 'jammer_file.bin', False)
         self.blocks_file_sink_0.set_unbuffered(False)
         self.blocks_complex_to_interleaved_char_0 = blocks.complex_to_interleaved_char(False, 127.0)
         self.analog_noise_source_x_0 = analog.noise_source_c(analog.GR_GAUSSIAN, 1, 0)

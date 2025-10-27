@@ -9,12 +9,12 @@ SAMPLING_RATE = 2048000
 GPS_WEAKEN_SCALE = 0.05  
 GPS_TRAJ_FILE = 'traj.csv' 
 GPS_SIGNAL_FILE = 'test.bin'
-JAMMER_SIGNAL_FILE = 'test_jammer.bin'
+JAMMER_SIGNAL_FILE = 'jammers/jammer_file.bin'
 OUTPUT_FILE = 'final_output_z_zagluszeniem.bin'
 
 # ustawienia jammera
-JAMMER_MAX_RANGE_METERS = 100.0  # Maksymalny zasięg, po którym moc = 0 (promień jammera)
-JAMMER_LOCATION = (50.00000000,19.9040000,350.0) 
+JAMMER_MAX_RANGE_METERS = 10.0  # Maksymalny zasięg, po którym moc = 0 (promień jammera)
+JAMMER_LOCATION = (50.00000000,19.9000090,350.0) 
 
 DYNAMIC_JAMMER_POWER = 1.0 
 STATIC_JAMMER_POWER = 1.0  
@@ -22,9 +22,9 @@ STATIC_JAMMER_POWER = 1.0
 AMPLITUDE_REFERENCE_DISTANCE_METERS = 15.0 
 
 # ustawienia trybu statycznego (brak traj.csv)
-DELAY_SECONDS = 80      
-DURATION_SECONDS = 10    
-STATIC_RECEIVER_LOCATION = (50.0000000, 19.9003000, 220.0)
+DELAY_SECONDS = 60      
+DURATION_SECONDS = 30    
+STATIC_RECEIVER_LOCATION = (50.0000000, 19.9000000, 350.0)
 
 
 def latlon_to_ecef(lat, lon, alt):
