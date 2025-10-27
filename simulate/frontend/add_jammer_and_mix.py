@@ -11,9 +11,6 @@ DYNAMIC_JAMMER_POWER = 1.0
 STATIC_JAMMER_POWER = 1.0  
 AMPLITUDE_REFERENCE_DISTANCE_METERS = 15.0 
 
-DELAY_SECONDS = 60      
-DURATION_SECONDS = 30    
-STATIC_RECEIVER_LOCATION = (50.0000000, 19.9000000, 350.0)
 
 
 def latlon_to_ecef(lat, lon, alt):
@@ -36,6 +33,9 @@ def main(args):
     OUTPUT_FILE = args.output_file
     JAMMER_LOCATION = (args.jammer_lat, args.jammer_lon, args.jammer_alt)
     JAMMER_MAX_RANGE_METERS = args.jammer_range
+
+    DELAY_SECONDS = args.delay_seconds
+    DURATION_SECONDS = args.duration_seconds
 
     try:
         print(f"Wczytywanie sygnału GPS z: {GPS_SIGNAL_FILE}")
@@ -126,6 +126,12 @@ def main(args):
     # dla braku traj.csv (tryb statyczny)
     else:
         print(f"Tryb STATYCZNY (plik {GPS_TRAJ_FILE} nie istnieje)")
+
+        if args.static_lat is None or args.static_lon is None or args.static_alt is None:
+            print("BŁĄD: W trybie statycznym wymagane są argumenty --static-lat, --static-lon, --static-alt.")
+            exit(1)
+        STATIC_RECEIVER_LOCATION = (args.static_lat, args.static_lon, args.static_alt)
+
         jammer_coords_2d = (JAMMER_LOCATION[0], JAMMER_LOCATION[1])
         receiver_coords_2d = (STATIC_RECEIVER_LOCATION[0], STATIC_RECEIVER_LOCATION[1])
         distance_2d = haversine(jammer_coords_2d, receiver_coords_2d, unit=Unit.METERS)
@@ -171,6 +177,9 @@ if __name__ == "__main__":
     parser.add_argument("--gps-file", required=True, help="Plik wejściowy z sygnałem GPS (np. test.bin)")
     parser.add_argument("--jammer-file", default="jammers/jammer_file.bin", help="Plik wejściowy z sygnałem jammera (domyślnie: jammers/jammer_file.bin)")
     parser.add_argument("--output-file", required=True, help="Nazwa pliku wyjściowego (np. final_output.bin)")
+    parser.add_argument("--static-lat", type=float, default=None, help="Szerokość geograficzna odbiornika w trybie statycznym")
+    parser.add_argument("--static-lon", type=float, default=None, help="Długość geograficzna odbiornika w trybie statycznym")
+    parser.add_argument("--static-alt", type=float, default=None, help="Wysokość odbiornika w trybie statycznym")
 
     parser.add_argument("--jammer-lat", type=float, required=True, help="Szerokość geograficzna jammera (np. 50.0001)")
     parser.add_argument("--jammer-lon", type=float, required=True, help="Długość geograficzna jammera (np. 19.9001)")
@@ -178,6 +187,10 @@ if __name__ == "__main__":
     parser.add_argument("--jammer-range", type=float, required=True, help="Maksymalny zasięg jammera w metrach (np. 15.0)")
 
     parser.add_argument("--samplerate", type=float, default=2048000.0, help="Częstotliwość próbkowania (domyślnie: 2048000.0)")
-
+    parser.add_argument("--delay-seconds", type=int, default=60, help="Opóźnienie jammera w sekundach (domyślnie: 60.0)")
+    parser.add_argument("--duration-seconds", type=int, default=30, help="Czas trwania jammera w sekundach (domyślnie: 30.0)")
+    
+    
+    
     parsed_args = parser.parse_args()
     main(parsed_args)

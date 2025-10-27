@@ -4,7 +4,7 @@ python add_jammer.py --iq test.bin --out jammed.bin --type noise --traj traj.csv
 
 
 do zrobienia:
- - zautomatyzować to mixowanie
+ - zautomatyzować to mixowanie - GOTOWE !!!!!!! :))))
  - przenieść skrypty jammerów do dobrego foldera - GOTOWE
  - po zmixowaniu, kasowanie tego pliku traj.csv - GOTOWE
  - posprzątać syf - 50% GOTOWE

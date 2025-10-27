@@ -100,6 +100,7 @@ class App(tk.Tk):
         self.jammer_labels = [           
             "Szerokość geograficzna jammera:",
             "Długość geograficzna jammera:",
+            "Wysokość (m n.p.m.) jammera:",
             "Zasięg jammera (m):"
         ]
         
@@ -109,17 +110,30 @@ class App(tk.Tk):
         for r, name in enumerate(self.jammer_labels):
             lbl = tk.Label(self.jammer_frame, text=name, width=28, anchor="e")
             
-            if r == 0:
+            if r == 0: 
                 ent = tk.Entry(self.jammer_frame, width=40, validate="key", validatecommand=self.v_lat_key)
-            elif r == 1:
+            elif r == 1: 
                 ent = tk.Entry(self.jammer_frame, width=40, validate="key", validatecommand=self.v_lon_key)
-            elif r == 2:
+            elif r == 2: 
+                ent = tk.Entry(self.jammer_frame, width=40, validate="key", validatecommand=self.v_alt_key)
+            elif r == 3: 
                 ent = tk.Entry(self.jammer_frame, width=40, validate="key", validatecommand=self.v_range_key)
             
             lbl.grid(row=r, column=0, padx=(0,10), pady=5, sticky="e")
             ent.grid(row=r, column=1, pady=5, sticky="we")
             self.jammer_entries.append(ent)
             self.jammer_widgets.append((lbl, ent))
+        
+        self.jammer_delay_lbl = tk.Label(self.jammer_frame, text="Opóźnienie jammera (s):", width=28, anchor="e")
+        self.jammer_delay_ent = tk.Entry(self.jammer_frame, width=40, validate="key", validatecommand=self.v_sec_key)
+        
+        self.jammer_duration_lbl = tk.Label(self.jammer_frame, text="Czas trwania jammera (s):", width=28, anchor="e")
+        self.jammer_duration_ent = tk.Entry(self.jammer_frame, width=40, validate="key", validatecommand=self.v_sec_key)
+
+        self.jammer_delay_lbl.grid(row=4, column=0, padx=(0,10), pady=5, sticky="e")
+        self.jammer_delay_ent.grid(row=4, column=1, pady=5, sticky="we")
+        self.jammer_duration_lbl.grid(row=5, column=0, padx=(0,10), pady=5, sticky="e")
+        self.jammer_duration_ent.grid(row=5, column=1, pady=5, sticky="we")
 
         self.jammer_type_var = tk.StringVar(value="BB") 
 
@@ -131,7 +145,7 @@ class App(tk.Tk):
         ]
 
         jammer_radios_frame = tk.Frame(self.jammer_frame)
-        jammer_radios_frame.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky="w")
+        jammer_radios_frame.grid(row=6, column=0, columnspan=2, pady=(10,0), sticky="w")
 
         tk.Label(jammer_radios_frame, text="Typ jammera:", font=("Arial", 10, "bold"))\
             .grid(row=0, column=0, sticky="w", pady=(0, 5))
@@ -206,16 +220,22 @@ class App(tk.Tk):
         self.update_fields_visibility()
 
     def update_fields_visibility(self):
-        """Aktualizuje widoczność pól w zależności od trybu i stanu ruchomy"""
-        base_count = 5  
-        
-        if self.is_ruchomy.get():
-            base_count = 8 
-
+        base_count = 8 if self.is_ruchomy.get() else 5  
         self.update_input_visibility(base_count)
 
         if self.mode_var.get() == "B":
             self.jammer_frame.grid()
+
+            if self.is_ruchomy.get():
+                self.jammer_delay_lbl.grid_remove()
+                self.jammer_delay_ent.grid_remove()
+                self.jammer_duration_lbl.grid_remove()
+                self.jammer_duration_ent.grid_remove()
+            else:
+                self.jammer_delay_lbl.grid()
+                self.jammer_delay_ent.grid()
+                self.jammer_duration_lbl.grid()
+                self.jammer_duration_ent.grid()
         else:
             self.jammer_frame.grid_remove()
 
@@ -246,14 +266,19 @@ class App(tk.Tk):
                 self.entries[i].insert(0, val)
 
         jammer_defaults = [
-            "50.0263760",
-            "19.644750",
-            "10"
+            "50.0000000",
+            "19.9040000",
+            "350.0",
+            "20"
         ]
         for i, val in enumerate(jammer_defaults):
             if i < len(self.jammer_entries):
                 self.jammer_entries[i].delete(0, tk.END)
                 self.jammer_entries[i].insert(0, val)
+        self.jammer_delay_ent.delete(0, tk.END)
+        self.jammer_delay_ent.insert(0, "60") 
+        self.jammer_duration_ent.delete(0, tk.END)
+        self.jammer_duration_ent.insert(0, "30")
 
     def start_btn_state(self, enabled: bool):
         for child in self.root_frame.grid_slaves(row=5, column=0):
@@ -312,7 +337,6 @@ class App(tk.Tk):
             self.after(0, lambda: messagebox.showinfo("Sukces", msg))
 
         except subprocess.CalledProcessError as e:
-            # Jeśli którykolwiek z 3 kroków się nie powiedzie
             error_msg = (f"Błąd podczas wykonywania polecenia:\n{' '.join(e.cmd)}\n\n"
                          f"Błąd (stderr):\n{e.stderr}\n\n"
                          f"Output (stdout):\n{e.stdout}")
@@ -327,12 +351,10 @@ class App(tk.Tk):
             print(f"BŁĄD SEKWENCJI: {error_msg}")
             self.after(0, lambda: messagebox.showerror("Błąd", error_msg))
         finally:
-            # Niezależnie od wyniku, odblokuj przycisk START
             print("--- ZAKOŃCZENIE SEKWENCJI JAMMERA ---")
             self.after(0, lambda: self.start_btn_state(True))
 
     def on_start(self):
-        # ustawienia na twardo wpisywane
         EPHEMERIS_FILE = self.EPHERIS_FILE_PATH
         T_STATIONARY   = "2025/10/10,00:00:00"
         T_MOBILE       = "2025/10/10,00:00:00"
@@ -357,7 +379,6 @@ class App(tk.Tk):
         idx_lon_end    = 6
         idx_alt_end    = 7
 
-        # Walidacja podstawowych pól (wspólna dla wszystkich trybów)
         filename = values[idx_filename]
         if not filename.lower().endswith(".bin"):
             messagebox.showerror("Błąd", "Nazwa pliku musi kończyć się na .bin")
@@ -448,19 +469,26 @@ class App(tk.Tk):
             try:
                 jammer_lat = self.jammer_entries[0].get().strip()
                 jammer_lon = self.jammer_entries[1].get().strip()
-                jammer_range = self.jammer_entries[2].get().strip()
+                jammer_alt = self.jammer_entries[2].get().strip() 
+                jammer_range = self.jammer_entries[3].get().strip() 
             except IndexError:
                 messagebox.showerror("Błąd", "Nie można odnaleźć pól jammera.")
                 return
+
             if not self._lon_in_range(jammer_lon):
                 messagebox.showerror("Błąd", "Długość geograficzna jammera jest nieprawidłowa.")
                 self.jammer_entries[0].focus_set(); return
             if not self._lat_in_range(jammer_lat):
                 messagebox.showerror("Błąd", "Szerokość geograficzna jammera jest nieprawidłowa.")
                 self.jammer_entries[1].focus_set(); return
+            
+            if not self._alt_in_range(jammer_alt):
+                messagebox.showerror("Błąd", f"Wysokość jammera musi być w zakresie {self.ALT_MIN}..{self.ALT_MAX} m.")
+                self.jammer_entries[2].focus_set(); return
+            
             if not self._range_in_range(jammer_range): 
                 messagebox.showerror("Błąd", "Zasięg jammera jest nieprawidłowy (musi być > 0).")
-                self.jammer_entries[2].focus_set(); return
+                self.jammer_entries[3].focus_set(); return 
             
             jammer_type_key = self.jammer_type_var.get()
             
@@ -529,7 +557,7 @@ class App(tk.Tk):
             gps_input_file = filename 
             final_output_file = filename 
             
-            jammer_alt = "350.0" 
+            #jammer_alt = "350.0" 
 
             mixer_cmd = [
                 sys.executable,
@@ -541,8 +569,36 @@ class App(tk.Tk):
                 "--jammer-alt", jammer_alt,
                 "--jammer-range", jammer_range,
                 "--samplerate", SAMPLERATE
-                # --jammer-file, mozna dodac swojego"
+                # --jammer-file, mozna dodac swój plik jammera"
             ]
+            if not self.is_ruchomy.get():
+                delay_txt = self.jammer_delay_ent.get().strip()
+                if not delay_txt.isdigit() or int(delay_txt) < 0:
+                    messagebox.showerror("Błąd", "Opóźnienie jammera (s) musi być liczbą całkowitą >= 0.")
+                    self.jammer_delay_ent.focus_set(); return
+                delay_sec = int(delay_txt)
+
+                duration_txt = self.jammer_duration_ent.get().strip()
+                if not duration_txt.isdigit() or int(duration_txt) <= 0:
+                    messagebox.showerror("Błąd", "Czas trwania jammera (s) musi być liczbą całkowitą > 0.")
+                    self.jammer_duration_ent.focus_set(); return
+                
+                if delay_sec >= seconds:
+                    messagebox.showwarning("Ostrzeżenie", 
+                        f"Opóźnienie jammera ({delay_sec}s) jest równe lub dłuższe niż całkowity czas próbki ({seconds}s). "
+                        "Jammer nie zostanie uruchomiony.")
+                
+                static_lat = values[idx_lat_start]
+                static_lon = values[idx_lon_start]
+                static_alt = values[idx_alt_start]
+                
+                mixer_cmd.extend([
+                    "--delay-seconds", delay_txt,
+                    "--duration-seconds", duration_txt,
+                    "--static-lat", static_lat,
+                    "--static-lon", static_lon,
+                    "--static-alt", static_alt
+                ])
 
             print(f"Rozpoczynanie sekwencji Trybu B (Jammer) dla pliku: {filename}")
             self.start_btn_state(False) 
