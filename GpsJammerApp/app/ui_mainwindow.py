@@ -1,5 +1,7 @@
 import os
 import random
+import subprocess  # <--- DODANE
+import sys         # <--- DODANE
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QGroupBox, 
                              QTextEdit, QFileDialog, QProgressBar, 
@@ -344,16 +346,18 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(results_group)
 
-        test_group = QGroupBox("Dane Testowe")
-        test_group.setStyleSheet(group_style)
-        test_layout = QVBoxLayout(test_group)
+        # --- SEKCJA ZMODYFIKOWANA ---
+        sim_group = QGroupBox("Symulacja") # <--- ZMIENIONY TYTUŁ
+        sim_group.setStyleSheet(group_style)
+        sim_layout = QVBoxLayout(sim_group)
         
-        self.add_test_btn = QPushButton("🧪 Dodaj Testowe Punkty")
-        self.add_test_btn.clicked.connect(self.add_test_points)
-        self.add_test_btn.setStyleSheet(test_button_style)
-        test_layout.addWidget(self.add_test_btn)
+        self.run_simulation_btn = QPushButton("⚙️ Wygeneruj pliki symulacyjne") # <--- NOWY PRZYCISK
+        self.run_simulation_btn.clicked.connect(self.run_simulation_script) # <--- NOWA METODA
+        self.run_simulation_btn.setStyleSheet(test_button_style)
+        sim_layout.addWidget(self.run_simulation_btn)
         
-        layout.addWidget(test_group)
+        layout.addWidget(sim_group)
+        # --- KONIEC SEKCJI ZMODYFIKOWANEJ ---
 
         layout.addStretch()
         
@@ -438,23 +442,37 @@ Parametry analizy:
         self.web_view.page().runJavaScript("clearSignalMarkers();")
         self.results_text.setPlainText("Markery i ślad zostały wyczyszczone.")
         
-    def add_test_points(self):
-        """Dodaje testowe punkty zakłóceń"""
-        test_points = [
-            {'lat': config.LAT + 0.005, 'lng': config.LNG + 0.005, 'strength': 85, 'frequency': 1575.42},
-            {'lat': config.LAT - 0.003, 'lng': config.LNG + 0.008, 'strength': 92, 'frequency': 1575.38},
-            {'lat': config.LAT + 0.002, 'lng': config.LNG - 0.006, 'strength': 67, 'frequency': 1575.45},
-            {'lat': config.LAT - 0.007, 'lng': config.LNG - 0.002, 'strength': 43, 'frequency': 1575.40},
-            {'lat': config.LAT + 0.008, 'lng': config.LNG + 0.001, 'strength': 78, 'frequency': 1575.44},
-        ]
-        
-        for point in test_points:
-            js_code = f"""
-            addJammingPoint({point['lat']}, {point['lng']}, {point['strength']}, {point['frequency']});
-            """
-            self.web_view.page().runJavaScript(js_code)
+
+    def run_simulation_script(self):
+            """Uruchamia zewnętrzny skrypt Pythona do generowania symulacji."""
+            python_executable = sys.executable
             
-        self.results_text.setPlainText(f"Dodano {len(test_points)} testowych punktów zakłóceń GPS.")
+            try:
+                current_dir = os.path.dirname(__file__)
+            except NameError:
+                current_dir = os.getcwd() 
+                
+            script_path = os.path.normpath(
+                os.path.join(current_dir, "..", "..", "simulate", "frontend", "gnss_frontend.py")
+            )
+            command = [python_executable, script_path]
+            self.results_text.setPlainText(f"Uruchamianie skryptu symulacyjnego:\n{script_path}...")
+            
+            try:
+                if not os.path.exists(script_path):
+                    raise FileNotFoundError(f"Plik skryptu nie istnieje: {script_path}")
+                
+                subprocess.Popen(command)
+                self.results_text.append("\nSkrypt został pomyślnie uruchomiony.")
+                
+            except FileNotFoundError as fnf_error:
+                self.results_text.setPlainText(f"BŁĄD: Nie znaleziono skryptu lub interpretera.\n"
+                                            f"Błąd: {fnf_error}\n"
+                                            f"Sprawdzana ścieżka: {script_path}\n"
+                                            f"Interpreter: {python_executable}")
+            except Exception as e:
+                self.results_text.setPlainText(f"BŁĄD podczas uruchamiania skryptu:\n{e}")
+
 
     def start_live_tracking(self):
         """Rozpoczyna symulację śledzenia na żywo co 3 sekundy"""
@@ -477,8 +495,6 @@ Parametry analizy:
         self.stop_live_btn.setEnabled(False)
         self.results_text.setPlainText("Zatrzymano śledzenie na żywo.")
 
-
-# tu skrypt kuby !!!!!!!!!!!!!!!!!!!!!!1
     def update_live_position(self):
         self.current_live_lat += random.uniform(-0.0005, 0.0005)
         self.current_live_lng += random.uniform(0.0003, 0.001) # Symulacja ruchu na wschód
@@ -486,4 +502,3 @@ Parametry analizy:
         js_code = f"window.updateLivePosition({self.current_live_lat}, {self.current_live_lng});"
         self.web_view.page().runJavaScript(js_code)
         
-        print(f"Nowa pozycja: {self.current_live_lat}, {self.current_live_lng}")
