@@ -173,6 +173,7 @@ python GpsJammerApp/wstepny.py
 # Z katalogu głównego
 python simulate/frontend/gnss_frontend.py
 ```
+# Lub poprzez nacisnięcie przyciku frontendzie
 
 **Co to robi:**
 - Otworzy okno z formularzem do generowania plików GPS
