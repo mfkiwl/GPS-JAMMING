@@ -7,7 +7,7 @@ Przewodnik krok po kroku do uruchomienia systemu analizy i detekcji zakłóceń 
 - **System operacyjny**: Linux (zalecane Ubuntu 20.04+), Windows 10/11, macOS
 - **Python**: 3.8+ (zalecane 3.10 lub 3.11)
 - **RAM**: minimum 4GB (zalecane 8GB+)
-- **Miejsce na dysku**: ~20GB na wszystkie zależności
+- **Miejsce na dysku**: ~5GB na wszystkie zależności
 - **Grafika**: karta obsługująca OpenGL (do map i wizualizacji)
 
 ## 🚀 Krok 1: Przygotowanie środowiska
@@ -22,6 +22,7 @@ cd /ścieżka/do/projektu
 # ├── simulate/
 # ├── skrypty/
 # ├── frontend/
+# ├── gops/ (kod Go)
 # └── README.md
 ```
 
@@ -31,7 +32,7 @@ cd /ścieżka/do/projektu
 cd GPS-JAMMING
 
 # Utwórz virtualenv
-python3 -m venv --system-site-packages .venv
+python3 -m venv .venv
 
 # Aktywuj virtualenv
 # Linux/macOS:
@@ -112,6 +113,15 @@ sudo apt install rtl-sdr librtlsdr-dev
 pip install pyrtlsdr
 ```
 
+### 3.4 Go (dla komponentów backend)
+```bash
+# Linux/macOS - zainstaluj Go z https://golang.org/dl/
+# Ubuntu:
+sudo apt install golang-go
+
+# Windows - pobierz installer z golang.org
+```
+
 ## 🧪 Krok 4: Sprawdzenie instalacji
 
 ### 4.1 Test podstawowej funkcjonalności
@@ -163,8 +173,9 @@ python GpsJammerApp/wstepny.py
 
 ### 5.2 Test podstawowych funkcji
 1. **Zmiana typu mapy** - kliknij przyciski: "🗺️ OpenStreetMap", "🛰️ Satelitarna", "🏔️ Topograficzna"
-2. **Wybór pliku** - kliknij "📁 Wybierz plik" (możesz wybrać dowolny plik .bin)
-3. **Live tracking** - kliknij "▶️ Start" aby przetestować symulację śledzenia na żywo
+2. **Wybór pliku** - kliknij "📁 Wybierz pliki (maks. 3)" (możesz wybrać pliki .bin)
+3. **Parametry analizy** - ustaw częstotliwość (1575.42 MHz) i próg wykrywania
+4. **Symulacja** - kliknij "⚙️ Wygeneruj pliki symulacyjne"
 
 ## 🔬 Krok 6: Uruchomienie narzędzi symulacyjnych
 
@@ -173,7 +184,7 @@ python GpsJammerApp/wstepny.py
 # Z katalogu głównego
 python simulate/frontend/gnss_frontend.py
 ```
-# Lub poprzez nacisnięcie przyciku frontendzie
+**Lub poprzez naciśnięcie przycisku w głównym GUI**
 
 **Co to robi:**
 - Otworzy okno z formularzem do generowania plików GPS
@@ -193,6 +204,13 @@ make
 
 # Sprawdź czy działa
 ./gps-sdr-sim -h
+```
+
+### 6.3 Generowanie jammerów (GNU Radio)
+```bash
+# Przykłady jammerów w simulate/frontend/jammers/
+cd simulate/frontend/jammers
+python cwJammer.py  # Continuous Wave Jammer
 ```
 
 ## 📊 Krok 7: Uruchomienie skryptów analizy
@@ -224,6 +242,12 @@ nano skrypty/triangulateTDOA.py
 python skrypty/triangulateTDOA.py
 ```
 
+### 7.5 Wizualizacja triangulacji z wykresami
+```bash
+# Triangulacja RSSI z wykresami
+python skrypty/triangulateRSSIplot.py
+```
+
 ## 🗂️ Krok 8: Przygotowanie danych testowych
 
 ### 8.1 Struktura katalogów
@@ -232,6 +256,7 @@ python skrypty/triangulateTDOA.py
 mkdir -p data/recordings
 mkdir -p data/cache
 mkdir -p plots
+mkdir -p capture
 ```
 
 ### 8.2 Pobierz przykładowe pliki (jeśli dostępne)
@@ -246,6 +271,20 @@ mkdir -p plots
 python simulate/frontend/gnss_frontend.py
 # Ustaw parametry i kliknij "Rozpocznij"
 ```
+
+## 🏗️ Krok 9: Kompilacja komponentów Go (opcjonalne)
+
+### 9.1 Kompilacja backendu SDR
+```bash
+cd gops
+go build -o gps-sdr-receiver *.go
+```
+
+**Co zawiera gops/:**
+- [`sdrmain.go`](gops/sdrmain.go) - główny program
+- [`sdracq.go`](gops/sdracq.go) - akwizycja sygnałów
+- [`sdrtrk.go`](gops/sdrtrk.go) - śledzenie satelitów
+- [`sdrpvt.go`](gops/sdrpvt.go) - obliczenia pozycji
 
 ## 🔧 Rozwiązywanie problemów
 
@@ -262,7 +301,7 @@ pip install PyQt5 PyQtWebEngine
 ### Problem: Mapa się nie ładuje
 - Sprawdź połączenie internetowe (mapa pobiera kafelki z OSM)
 - Sprawdź czy QtWebEngine jest zainstalowane
-- Spróbuj uruchomić w trybie debugowania
+- Sprawdź czy plik [`GpsJammerApp/resources/map_template.html`](GpsJammerApp/resources/map_template.html) istnieje
 
 ### Problem: GNU Radio nie działa
 - GNU Radio jest opcjonalne - aplikacja główna powinna działać bez niego
@@ -270,21 +309,27 @@ pip install PyQt5 PyQtWebEngine
 
 ### Problem: "FileNotFoundError" przy symulacji
 - Sprawdź czy gps-sdr-sim jest skompilowany i dostępny
-- Sprawdź ścieżki w `simulate/frontend/gnss_frontend.py`
+- Sprawdź ścieżki w [`simulate/frontend/gnss_frontend.py`](simulate/frontend/gnss_frontend.py)
 - Pobierz pliki efemeryd (brdc*.n) z [NASA](https://cddis.nasa.gov/archive/gnss/data/daily/)
+
+### Problem: Błędy triangulacji
+- Sprawdź ścieżki do plików w skryptach [`triangulateRSSI.py`](skrypty/triangulateRSSI.py) i [`triangulateTDOA.py`](skrypty/triangulateTDOA.py)
+- Upewnij się, że pliki są w formacie uint8 I/Q
+- Sprawdź czy pozycje anten są poprawnie skonfigurowane
 
 ## 📚 Kolejne kroki
 
 ### Eksploruj funkcjonalność:
-1. **Analiza plików** - użyj `GpsJammerApp/wstepny.py`
-2. **Symulacje** - eksperymentuj z `simulate/frontend/gnss_frontend.py`  
-3. **Skrypty analizy** - dostosuj parametry w `skrypty/`
-4. **Wizualizacje** - sprawdź wyniki w `frontend/map.py`
+1. **Analiza plików** - użyj [`GpsJammerApp/wstepny.py`](GpsJammerApp/wstepny.py)
+2. **Symulacje** - eksperymentuj z [`simulate/frontend/gnss_frontend.py`](simulate/frontend/gnss_frontend.py)  
+3. **Skrypty analizy** - dostosuj parametry w [`skrypty/`](skrypty/)
+4. **Wizualizacje** - sprawdź wyniki w [`frontend/map.py`](frontend/map.py)
 
 ### Zaawansowane użycie:
 - Podłącz prawdziwy odbiornik RTL-SDR
-- Skonfiguruj własne algorytmy detekcji w `GpsJammerApp/app/checkIfJamming.py`
-- Rozszerz GUI o nowe funkcje w `GpsJammerApp/app/ui_mainwindow.py`
+- Skonfiguruj własne algorytmy detekcji w [`GpsJammerApp/app/checkIfJamming.py`](GpsJammerApp/app/checkIfJamming.py)
+- Rozszerz GUI o nowe funkcje w [`GpsJammerApp/app/ui_mainwindow.py`](GpsJammerApp/app/ui_mainwindow.py)
+- Modyfikuj ustawienia mapy w [`GpsJammerApp/app/config.py`](GpsJammerApp/app/config.py)
 
 ## 📁 Struktura projektu
 
@@ -296,26 +341,45 @@ GPS-JAMMING/
 │   ├── app/
 │   │   ├── ui_mainwindow.py   # Główne okno aplikacji
 │   │   ├── checkIfJamming.py  # Algorytmy detekcji
-│   │   ├── config.py          # Konfiguracja
-│   │   └── worker.py          # Wątki robocze
+│   │   ├── config.py          # Konfiguracja (współrzędne mapy)
+│   │   ├── worker.py          # Wątki robocze
+│   │   └── test.py            # Testy GPS SDR
+│   ├── backend/               # Backend C
+│   │   ├── sdrcode.c          # Generowanie kodów GPS
+│   │   ├── sdrpvt.c           # Obliczenia pozycji
+│   │   └── sdr.h              # Definicje
+│   ├── backendhttp/           # Backend HTTP C
 │   └── resources/
 │       └── map_template.html  # Szablon mapy
 ├── simulate/                   # Narzędzia symulacyjne
 │   ├── frontend/
 │   │   ├── gnss_frontend.py   # GUI do generowania symulacji
+│   │   ├── add_jammer_and_mix.py  # Miksowanie jammerów
 │   │   └── jammers/           # Różne typy jammerów
+│   │       └── cwJammer.py    # Continuous Wave Jammer
 │   └── gps-sdr-sim/          # Zewnętrzny generator GPS (do pobrania)
 ├── skrypty/                   # Skrypty analizy
 │   ├── triangulateRSSI.py     # Triangulacja RSSI
+│   ├── triangulateRSSIplot.py # Triangulacja RSSI z wykresami
 │   ├── triangulateTDOA.py     # Triangulacja TDOA
-│   └── widmo_plot.py          # Analiza widma
+│   ├── widmo_plot.py          # Analiza widma
+│   └── CalculateDistance.py   # Obliczenia odległości
 ├── frontend/                  # Dodatkowe narzędzia wizualizacji
-│   └── map.py
+│   └── map.py                 # Mapa (PyQt5 wersja)
+├── gops/                      # Backend Go
+│   ├── sdrmain.go            # Główny program SDR
+│   ├── sdracq.go             # Akwizycja sygnałów
+│   ├── sdrtrk.go             # Śledzenie satelitów
+│   ├── sdrpvt.go             # Obliczenia pozycji PVT
+│   └── sdr*.go               # Inne moduły SDR
 ├── data/                      # Katalog na dane (stwórz ręcznie)
+├── capture/                   # Nagrania SDR
 ├── plots/                     # Wyniki wizualizacji
-└── notatki/                   # Dokumentacja i notatki
-    ├── notes.md
-    └── todo.txt
+├── docs/                      # Dokumentacja
+└── notatki/                   # Notatki projektowe
+    ├── notes.md              # Główne notatki
+    ├── notes.txt             # Notatki tekstowe
+    └── todo.txt              # Lista zadań
 ```
 
 ## 🎯 Szybki start (TL;DR)
@@ -332,20 +396,33 @@ source .venv/bin/activate  # Linux/macOS
 # .venv\Scripts\activate.bat  # Windows
 
 # 3. Zainstaluj minimum
-pip install PySide6 PySide6-QtWebEngine numpy pandas matplotlib
+pip install PySide6 PySide6-QtWebEngine numpy pandas matplotlib haversine scikit-learn
 
 # 4. Uruchom główną aplikację
 python GpsJammerApp/wstepny.py
 ```
 
+### Tylko analiza (bez GUI):
+```bash
+# Detekcja jammerów
+python GpsJammerApp/app/checkIfJamming.py plik.bin 5000.0
+
+# Analiza widma
+python skrypty/widmo_plot.py plik.bin --fs 2048000
+
+# Triangulacja (edytuj ścieżki w skrypcie)
+python skrypty/triangulateRSSI.py
+```
+
 ---
 
-🎉 **Gratulacje!** Masz teraz w pełni działający system do analizy zakłóceń GPS. Jeśli napotkasz problemy, sprawdź `notatki/notes.md` i `notatki/todo.txt` dla dodatkowych wskazówek.
+🎉 **Gratulacje!** Masz teraz w pełni działający system do analizy zakłóceń GPS. Jeśli napotkasz problemy, sprawdź [`notatki/notes.md`](notatki/notes.md) i [`notatki/todo.txt`](notatki/todo.txt) dla dodatkowych wskazówek.
 
 ## 📞 Pomoc i wsparcie
 
 - **Issues**: Zgłaszaj problemy w repozytorium GitHub
-- **Dokumentacja**: Sprawdź pliki w katalogu `notatki/`
-- **Przykłady**: Zobacz `docs/` (jeśli istnieje)
+- **Dokumentacja**: Sprawdź pliki w katalogu [`notatki/`](notatki/)
+- **Konfiguracja**: Zobacz [`GpsJammerApp/app/config.py`](GpsJammerApp/app/config.py) dla ustawień mapy
+- **Testy**: Uruchom [`GpsJammerApp/app/test.py`](GpsJammerApp/app/test.py) dla testów GPS SDR
 
-**Ostatnia aktualizacja**: Listopad 2025
+**Ostatnia aktualizacja**: Grudzień 2024
