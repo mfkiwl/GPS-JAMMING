@@ -1,0 +1,15 @@
+./gps-sdr-sim -e brdc2830.25n -l 39.087822,-94.577656,100 -b 8 -d 60 -t 2025/10/10,12:00:00 -o test_improved.bin -s 2048000 -v
+
+python add_jammer.py --iq test.bin --out jammed.bin --type noise --traj traj.csv --jam-lat 19.89266 --jam-lon 49.99979 --radius 400 --falloff inverse-square --edge 30
+
+
+do zrobienia:
+ - podłączyć to do frontu głównego (gotowe)
+ - podłączyć skrypt od zryta do tego
+ - podłączyć skrypt kuby do frontu
+ - przekminić logike sensu połączenia tego frontu
+ 
+ Dodatkowe pomysly jakby bylo mało roboty:
+- zrobić kateogryzacje tych 4 jammerów - jakieś flagi czy coś ( w sensie rozpoznawanie)
+- zrobić research jakiego typu jammera używają na ukrainie
+- zrobić live feed frontendu (50% jest)
