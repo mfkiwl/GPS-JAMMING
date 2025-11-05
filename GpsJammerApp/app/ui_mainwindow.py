@@ -49,9 +49,9 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.web_view, 3)
  
         self.analysis_thread = None
+        self.is_map_centered = False
         
     def create_control_panel(self, main_layout):
-        """Tworzy panel kontrolny po lewej stronie"""
         control_panel = QWidget()
         control_panel.setMaximumWidth(350)
         control_panel.setMinimumWidth(300)
@@ -234,7 +234,6 @@ class MainWindow(QMainWindow):
         self.freq_spin.setRange(1500, 1600)
         self.freq_spin.setValue(1575.42) 
         self.freq_spin.setDecimals(2)
-        # --- POPRAWKA WIDOCZNOŚCI ---
         self.freq_spin.setStyleSheet("""
         QDoubleSpinBox {
             border: 2px solid #bdc3c7;
@@ -248,14 +247,12 @@ class MainWindow(QMainWindow):
             border-color: #3498db;
         }
         """)
-        # --- KONIEC POPRAWKI ---
         params_layout.addWidget(self.freq_spin) 
 
         params_layout.addWidget(QLabel("Próg wykrywania [%]:"))
         self.threshold_spin = QSpinBox()
         self.threshold_spin.setRange(1, 100)
         self.threshold_spin.setValue(30)
-        # --- POPRAWKA WIDOCZNOŚCI ---
         self.threshold_spin.setStyleSheet("""
         QSpinBox {
             border: 2px solid #bdc3c7;
@@ -269,7 +266,6 @@ class MainWindow(QMainWindow):
             border-color: #3498db;
         }
         """)
-        # --- KONIEC POPRAWKI ---
         params_layout.addWidget(self.threshold_spin) 
         
         analysis_layout.addLayout(params_layout)
@@ -346,37 +342,29 @@ class MainWindow(QMainWindow):
         layout.addStretch()
         
     def change_map_layer(self, layer_type):
-        """Zmienia warstwę mapy"""
         self.web_view.page().runJavaScript(f"changeMapLayer('{layer_type}');")
         
-    # --- ZMIANA: Dodano limit 3 plików ---
     def browse_files(self):
-        """Otwiera dialog wyboru wielu plików (limit 3)"""
         file_paths, _ = QFileDialog.getOpenFileNames(
             self, 
-            "Wybierz pliki z danymi GPS (maks. 3)", # Zmieniony tytuł
+            "Wybierz pliki z danymi GPS (maks. 3)", 
             "../data/", 
             "Pliki binarne (*.bin);;Wszystkie pliki (*.*)"
         )
         
         if file_paths:
-            # --- ZMIANA: Sprawdzenie limitu plików ---
             if len(file_paths) > 3:
                 self.results_text.setPlainText("BŁĄD: Możesz wybrać maksymalnie 3 pliki.")
-                # Wyczyść stary wybór, jeśli jest niepoprawny
                 if hasattr(self, 'current_files'):
                     self.current_files.clear()
                 self.file_display.setPlainText("Wybierz maksymalnie 3 pliki.")
                 return 
-            # --- KONIEC ZMIANY ---
 
             self.current_files = file_paths 
             basenames = [os.path.basename(p) for p in file_paths]
             self.file_display.setPlainText("\n".join(basenames))
-    # --- KONIEC ZMIANY ---
         
     def start_analysis(self):
-        """Rozpoczyna analizę wybranych plików GPS"""
         if not hasattr(self, 'current_files') or not self.current_files:
             self.results_text.setPlainText("Najpierw wybierz plik(i) do analizy!")
             return
@@ -394,16 +382,24 @@ class MainWindow(QMainWindow):
         
         self.analysis_thread.progress_update.connect(self.update_progress)
         self.analysis_thread.analysis_complete.connect(self.analysis_finished)
+        self.analysis_thread.new_position_data.connect(self.update_map_position)
         self.analysis_thread.start()
         
         self.results_text.setPlainText(f"Rozpoczynam analizę {len(self.current_files)} plik(ów)...")
         
     def update_progress(self, value):
-        """Aktualizuje pasek postępu"""
         self.progress_bar.setValue(value)
         
+    def update_map_position(self, lat, lon):
+        if not self.is_map_centered:
+            js_pan_code = f"map.setView([{lat:.8f}, {lon:.8f}], 16);"
+            self.web_view.page().runJavaScript(js_pan_code)
+            self.is_map_centered = True 
+
+        js_draw_code = f"updateLivePosition({lat:.8f}, {lon:.8f});"
+        self.web_view.page().runJavaScript(js_draw_code)
+
     def analysis_finished(self, points):
-        """Wywoływane po zakończeniu analizy"""
         self.analyze_btn.setEnabled(True)
         self.clear_btn.setEnabled(True) 
         self.progress_bar.setVisible(False)
@@ -443,8 +439,8 @@ Parametry analizy:
         """Czyści wszystkie markery z mapy"""
         self.web_view.page().runJavaScript("clearSignalMarkers();")
         self.results_text.setPlainText("Markery i ślad zostały wyczyszczone.")
+        self.is_map_centered = False
         
-
     def run_simulation_script(self):
             """Uruchamia zewnętrzny skrypt Pythona do generowania symulacji."""
             python_executable = sys.executable
@@ -474,3 +470,4 @@ Parametry analizy:
                                             f"Interpreter: {python_executable}")
             except Exception as e:
                 self.results_text.setPlainText(f"BŁĄD podczas uruchamiania skryptu:\n{e}")
+    
