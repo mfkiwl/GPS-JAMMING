@@ -25,9 +25,10 @@ Zakres prac obejmuje:
 
 ### Łysy kod
 
-* [ ] Edycja – usunąć rzeczy nieużywane
-* [ ] Wywalić całość (brak sensu istnienia)
-* [ ] Wywalić `config file` (raczej cały katalog)
+* [ ] Edycja – usunąć rzeczy nieużywane (na ten moment BladeRF praktycznie usunięty, pozostałe etapy to cherry picking zbędnych funkcji)
+* [x] Wywalić GUI
+* [x] Hardcodować configi
+* [x] Dodać obsługę kodu z poziomu frontendu (przynajmniej częściowo)
 
 ### Sygnalówka
 

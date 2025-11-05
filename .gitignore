@@ -1,4 +1,5 @@
 *.bin
+*.o
 .venv/
 venv/
 env/
@@ -10,3 +11,4 @@ env.bak/
 __pycache__/
 pip-selfcheck.json
 /data/*
+data/*
