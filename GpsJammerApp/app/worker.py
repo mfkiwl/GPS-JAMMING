@@ -121,7 +121,7 @@ class GPSAnalysisThread(QThread):
             self.http_thread = threading.Thread(target=self.http_server.serve_forever)
             self.http_thread.daemon = True 
             self.http_thread.start()
-            print("[WORKER] Serwer HTTP uruchomiony na porcie 1234 (jak stary skrypt).") 
+            print("[WORKER] Serwer HTTP uruchomiony na porcie 1234.") 
             
         except Exception as e:
             print(f"[WORKER] BŁĄD: Nie można uruchomić serwera HTTP na porcie 1234: {e}")

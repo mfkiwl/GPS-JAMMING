@@ -141,19 +141,30 @@
           color: '#3388ff',
           fillColor: '#3388ff',
           fillOpacity: 0.8,
-          radius: 8,
+          radius: 10,
           weight: 3
         }}).addTo(map);
-        liveMarker.bindPopup("<b>Aktualna lokalizacja</b>").openPopup();
-        
+
+        liveMarker.bindPopup(`
+            <b>Aktualna lokalizacja:</b><br>
+            Szerokość geograficzna: ${{lat.toFixed(7)}}<br>
+            Długość geograficzna: ${{lng.toFixed(7)}}
+        `).openPopup();
+          
       }} else {{
         liveMarker.setLatLng(newPos);
+        // Aktualizuj popup z nowymi współrzędnymi
+        liveMarker.setPopupContent(`
+            <b>Aktualna lokalizacja:</b><br>
+            Szerokość geograficzna: ${{lat.toFixed(7)}}<br>
+            Długość geograficzna: ${{lng.toFixed(7)}}
+        `);
       }}
       
       if (!livePolyline) {{
         livePolyline = L.polyline([newPos], {{
           color: '#3388ff',
-          weight: 4,
+          weight: 6,
           opacity: 0.7
         }}).addTo(map);
       }} else {{
