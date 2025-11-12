@@ -1,18 +1,6 @@
-
-SZUPAN NOTATKI
 do zrobienia:
- - podłączyć skrypt od zryta do tego
- - podłączyć skrypt kuby do frontu
- - przekminić logike sensu połączenia tego frontu (chyba przekminione)
- 
- Dodatkowe pomysly jakby bylo mało roboty:
-- zrobić kateogryzacje tych 4 jammerów - jakieś flagi czy coś ( w sensie rozpoznawanie) (ewentualnie model do rozpoznawania tego)
-- zrobić research jakiego typu jammera używają na ukrainie (ważne)(cięzko znaleźć)
-
-
-NA TERAZ
-- readme do odpalenia
-- naprawić widok
-- przekminić jak odczytywać utime z pliku w pythonie
-
-Wysłać kubie screeny i notatki :)
+- Podłączyć skrypt kamila i go zmodyfikować :) (chyba działa)
+- przerobić troche front, aby pasek z boku był większy tak o 1,5 raza żeby mapa nie była taka duża (gotowe)
+- dodać do symulacji więcej opcji Glonass, galileo ()
+- dodać 3 buttony do wyboru (gps,glonass,galileo) (gotowe - logike dogadać z kubą)
+- poprawić algorytm do wykrywania jammingu
