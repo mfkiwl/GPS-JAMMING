@@ -1,24 +1,15 @@
 import numpy as np
 import math
 
-#   Obowiązkowe Antena 0 i 1  
-FILE_ANT0 = '17_10/capture1710_0_15m.bin'
-FILE_ANT1 = '17_10/capture1710_1.bin'
-ANT0_POS = np.array([0.0, 0.0])
-ANT1_POS = np.array([0.5, 0.0])
+# PARAMETRY KALIBRACYJNE (domyślne)
+DEFAULT_CALIBRATED_TX_POWER = 40.0
+DEFAULT_CALIBRATED_PATH_LOSS_EXPONENT = 3.0
+DEFAULT_SIGNAL_FREQUENCY_MHZ = 1575.42
+DEFAULT_SIGNAL_THRESHOLD = 0.1
 
-#   Opcjonalne Antena 2 
-# jeżeli nie używana, pozostawić None
-FILE_ANT2 = '17_10/capture1710_1.bin'#None 
-ANT2_POS = np.array([0.0, 0.5])#None  
-
-#PARAMETRY KALIBRACYJNE  
-CALIBRATED_TX_POWER = 40.0
-CALIBRATED_PATH_LOSS_EXPONENT = 3.0
-
-#PARAMETRY SYGNAŁU 
-SIGNAL_FREQUENCY_MHZ = 1575.42
-SIGNAL_THRESHOLD = 0.1
+# Stałe do konwersji metrów na stopnie/minuty geograficzne
+METERS_PER_DEGREE_LAT = 111320.0  # przybliżona wartość dla szerokości geograficznej
+METERS_PER_DEGREE_LON = 111320.0  # będzie korygowana w zależności od szerokości
 
 #Wczytywanie i przetwarzanie IQ w uint8 z pliku
 def read_iq_data(filename):
@@ -36,25 +27,60 @@ def find_change_point(amplitude_data, threshold):
     change_indices = np.where(amplitude_data > threshold)[0]
     return change_indices[0] if len(change_indices) > 0 else None
 
+# Konwersja metrów na stopnie geograficzne
+def meters_to_geographic_degrees(meters_x, meters_y, reference_lat=50.0):
+    """
+    Konwertuje przesunięcie w metrach na stopnie/minuty geograficzne.
+    
+    Args:
+        meters_x: przesunięcie w metrach (wschód/zachód)
+        meters_y: przesunięcie w metrach (północ/południe)
+        reference_lat: szerokość geograficzna referencyjna do korekcji longitude
+    
+    Returns:
+        tuple: (delta_lat_degrees, delta_lon_degrees, delta_lat_minutes, delta_lon_minutes)
+    """
+    # Szerokość geograficzna (latitude) - stała wartość na całym świecie
+    delta_lat_degrees = meters_y / METERS_PER_DEGREE_LAT
+    
+    # Długość geograficzna (longitude) - zależy od szerokości geograficznej
+    meters_per_degree_lon = METERS_PER_DEGREE_LON * math.cos(math.radians(reference_lat))
+    delta_lon_degrees = meters_x / meters_per_degree_lon
+    
+    # Konwersja na minuty (1 stopień = 60 minut)
+    delta_lat_minutes = delta_lat_degrees * 60
+    delta_lon_minutes = delta_lon_degrees * 60
+    
+    return delta_lat_degrees, delta_lon_degrees, delta_lat_minutes, delta_lon_minutes
+
 #Obliczanie odległości metodą RSSI
-def calculate_distance_from_file(iq_filename):
-    print(f"  Analizowanie pliku '{iq_filename}'  ")
+def calculate_distance_from_file(iq_filename, 
+                               tx_power=DEFAULT_CALIBRATED_TX_POWER,
+                               path_loss_exp=DEFAULT_CALIBRATED_PATH_LOSS_EXPONENT,
+                               frequency_mhz=DEFAULT_SIGNAL_FREQUENCY_MHZ,
+                               threshold=DEFAULT_SIGNAL_THRESHOLD,
+                               verbose=True):
+    if verbose:
+        print(f"  Analizowanie pliku '{iq_filename}'  ")
     iq_samples = read_iq_data(iq_filename)
     if iq_samples is None or len(iq_samples) == 0: return None
     amplitude = np.abs(iq_samples)
-    turn_on_index = find_change_point(amplitude, SIGNAL_THRESHOLD)
+    turn_on_index = find_change_point(amplitude, threshold)
     if turn_on_index is not None:
         avg_amplitude = np.mean(amplitude[turn_on_index:])
         if avg_amplitude == 0: return None
         received_power_db = 10 * np.log10(avg_amplitude**2)
-        print(f"Sygnał wykryty. Średnia amplituda: {avg_amplitude:.4f}")
-        print(f"Hipotetyczna moc odebrana: {received_power_db:.2f} dB")
-        path_loss_at_1m = 20 * np.log10(SIGNAL_FREQUENCY_MHZ) - 27.55
-        distance = 10 ** ((CALIBRATED_TX_POWER - received_power_db - path_loss_at_1m) / (10 * CALIBRATED_PATH_LOSS_EXPONENT))
-        print(f">>> Oszacowana odległość: {distance:.2f} m\n")
+        if verbose:
+            print(f"Sygnał wykryty. Średnia amplituda: {avg_amplitude:.4f}")
+            print(f"Hipotetyczna moc odebrana: {received_power_db:.2f} dB")
+        path_loss_at_1m = 20 * np.log10(frequency_mhz) - 27.55
+        distance = 10 ** ((tx_power - received_power_db - path_loss_at_1m) / (10 * path_loss_exp))
+        if verbose:
+            print(f">>> Oszacowana odległość: {distance:.2f} m\n")
         return distance
     else:
-        print(f"Nie wykryto sygnału z progiem {SIGNAL_THRESHOLD}.\n")
+        if verbose:
+            print(f"Nie wykryto sygnału z progiem {threshold}.\n")
         return None
 
 #   FUNKCJE OBLICZENIOWE DLA 2 ANTEN  
@@ -106,65 +132,284 @@ def trilaterate(p0, r0, p1, r1, p2, r2):
     y = (A * F - D * C) / determinant
     return np.array([x, y])
 
-#   MAIN
-
-if __name__ == "__main__":
-    print("Rozpoczynanie lokalizacji na podstawie mocy sygnału (RSSI).\n")
-    print("WAŻNE: Upewnij się, że parametry kalibracyjne i pozycje anten są poprawnie ustawione!\n")
-
-    # Wczytywanie danych z obowiązkowych anten
-    dist0 = calculate_distance_from_file(FILE_ANT0)
-    dist1 = calculate_distance_from_file(FILE_ANT1)
-
-    # Sprawdzenie, czy tryb 2-antenowy czy 3-antenowy
-    USE_THREE_ANTENNAS = FILE_ANT2 is not None and ANT2_POS is not None
-
-    if USE_THREE_ANTENNAS:
-        #   LOGIKA DLA 3 ANTEN  
-        print("Wykryto konfigurację dla 3 anten\n")
-        dist2 = calculate_distance_from_file(FILE_ANT2)
+def triangulate_jammer_location(file_paths, 
+                              antenna_positions_meters=None,
+                              reference_lat=50.06143,
+                              reference_lon=19.93658,
+                              tx_power=DEFAULT_CALIBRATED_TX_POWER,
+                              path_loss_exp=DEFAULT_CALIBRATED_PATH_LOSS_EXPONENT,
+                              frequency_mhz=DEFAULT_SIGNAL_FREQUENCY_MHZ,
+                              threshold=DEFAULT_SIGNAL_THRESHOLD,
+                              verbose=False):
+    """
+    Główna funkcja do triangulacji lokalizacji jammera na podstawie plików RSSI.
+    
+    Args:
+        file_paths: lista 2 lub 3 ścieżek do plików IQ
+        antenna_positions_meters: pozycje anten w metrach [(x0,y0), (x1,y1), (x2,y2)] lub None dla domyślnych
+        reference_lat: szerokość geograficzna referencyjna (środek układu współrzędnych)
+        reference_lon: długość geograficzna referencyjna (środek układu współrzędnych)
+        tx_power: moc nadajnika w dBm
+        path_loss_exp: wykładnik tłumienia ścieżki
+        frequency_mhz: częstotliwość sygnału w MHz
+        threshold: próg detekcji sygnału
+        verbose: czy wypisywać szczegółowe informacje
+    
+    Returns:
+        dict: {
+            'success': bool,
+            'distances': [dist0, dist1, dist2/None],
+            'location_meters': [x, y] lub None,
+            'location_geographic': {
+                'lat': float,
+                'lon': float,
+                'lat_offset_degrees': float,
+                'lon_offset_degrees': float,
+                'lat_offset_minutes': float,
+                'lon_offset_minutes': float
+            } lub None,
+            'message': str,
+            'num_antennas': int
+        }
+    """
+    
+    # Sprawdź liczbę plików
+    if len(file_paths) < 2 or len(file_paths) > 3:
+        return {
+            'success': False,
+            'distances': None,
+            'location_meters': None,
+            'location_geographic': None,
+            'message': 'Wymagane są 2 lub 3 pliki antenna',
+            'num_antennas': len(file_paths)
+        }
+    
+    # Domyślne pozycje anten (w metrach)
+    if antenna_positions_meters is None:
+        antenna_positions_meters = [
+            np.array([0.0, 0.0]),      # Antena 0 - punkt odniesienia
+            np.array([0.5, 0.0]),      # Antena 1 - 0.5m na wschód
+            np.array([0.0, 0.5])       # Antena 2 - 0.5m na północ (jeśli używana)
+        ]
+    
+    # Oblicz odległości dla każdej anteny
+    distances = []
+    for i, file_path in enumerate(file_paths):
+        dist = calculate_distance_from_file(
+            file_path, tx_power, path_loss_exp, frequency_mhz, threshold, verbose
+        )
+        distances.append(dist)
+        if dist is None:
+            return {
+                'success': False,
+                'distances': distances,
+                'location_meters': None,
+                'location_geographic': None,
+                'message': f'Nie udało się obliczyć odległości dla anteny {i} z pliku {file_path}',
+                'num_antennas': len(file_paths)
+            }
+    
+    # Triangulacja w zależności od liczby anten
+    if len(file_paths) == 3:
+        # 3 anteny - trilateracja
+        location = trilaterate(
+            antenna_positions_meters[0], distances[0],
+            antenna_positions_meters[1], distances[1],
+            antenna_positions_meters[2], distances[2]
+        )
         
-        if dist0 is None or dist1 is None or dist2 is None:
-            print("Nie udało się obliczyć jednej lub więcej odległości. Przerywanie pracy.")
-            exit()
-            
-        print("  Obliczanie lokalizacji dla 3 anten  ")
-        print(f"Dane wejściowe:")
-        print(f"  Antena 0: pos={ANT0_POS}, promień={dist0:.2f} m")
-        print(f"  Antena 1: pos={ANT1_POS}, promień={dist1:.2f} m")
-        print(f"  Antena 2: pos={ANT2_POS}, promień={dist2:.2f} m\n")
+        if location is None:
+            return {
+                'success': False,
+                'distances': distances,
+                'location_meters': None,
+                'location_geographic': None,
+                'message': 'Anteny są współliniowe - nie można jednoznacznie określić lokalizacji',
+                'num_antennas': 3
+            }
         
-        location = trilaterate(ANT0_POS, dist0, ANT1_POS, dist1, ANT2_POS, dist2)
+        message = f'Trilateracja dla 3 anten - lokalizacja: x={location[0]:.2f}m, y={location[1]:.2f}m'
         
-        if location is not None:
-            print(">>> Znaleziono najbardziej prawdopodobną lokalizację nadajnika:")
-            print(f"    Lokalizacja: x = {location[0]:.2f} m, y = {location[1]:.2f} m")
-        else:
-            print("Nie udało się obliczyć lokalizacji. Sprawdź pozycje anten.")
-
     else:
-        #   LOGIKA DLA 2 ANTEN  
-        print("Nie wykryto konfiguracji dla 3. anteny. Uruchamianie obliczeń dla 2 anten\n")
-        
-        if dist0 is None or dist1 is None:
-            print("Nie udało się obliczyć jednej z odległości. Przerywanie pracy.")
-            exit()
-        
-        intersections = find_circle_intersections(ANT0_POS, dist0, ANT1_POS, dist1)
+        # 2 anteny - przecięcie okręgów
+        intersections = find_circle_intersections(
+            antenna_positions_meters[0], distances[0],
+            antenna_positions_meters[1], distances[1]
+        )
         
         if intersections:
+            # Wybierz punkt bliższy centrum (0,0) - można zmienić logikę
             loc1, loc2 = intersections
-            print(">>> Znaleziono dwie możliwe lokalizacje nadajnika (idealne przecięcie):")
-            print(f"    Lokalizacja 1: x = {loc1[0]:.2f} m, y = {loc1[1]:.2f} m")
-            print(f"    Lokalizacja 2: x = {loc2[0]:.2f} m, y = {loc2[1]:.2f} m")
+            dist1 = np.linalg.norm(loc1)
+            dist2 = np.linalg.norm(loc2)
+            location = loc1 if dist1 <= dist2 else loc2
+            message = f'Bilateracja dla 2 anten - 2 możliwe lokalizacje, wybrano bliższą centrum: x={location[0]:.2f}m, y={location[1]:.2f}m'
         else:
-            print("Okręgi nie przecinają się. Błędy pomiarowe są zbyt duże dla idealnego rozwiązania.")
-            print("Uruchamianie estymacji w celu znalezienia najbardziej prawdopodobnego punktu\n")
-            
-            best_guess = find_best_estimate_no_intersection(ANT0_POS, dist0, ANT1_POS, dist1)
-            
-            if best_guess is not None:
-                 print(">>> Znaleziono najbardziej prawdopodobną lokalizację (estymacja):")
-                 print(f"    Lokalizacja: x = {best_guess[0]:.2f} m, y = {best_guess[1]:.2f} m")
-            else:
-                print("Nie udało się znaleźć oszacowania.")
+            # Brak przecięcia - estymacja
+            location = find_best_estimate_no_intersection(
+                antenna_positions_meters[0], distances[0],
+                antenna_positions_meters[1], distances[1]
+            )
+            if location is None:
+                return {
+                    'success': False,
+                    'distances': distances,
+                    'location_meters': None,
+                    'location_geographic': None,
+                    'message': 'Nie udało się znaleźć estymacji lokalizacji',
+                    'num_antennas': 2
+                }
+            message = f'Estymacja dla 2 anten (brak przecięcia) - lokalizacja: x={location[0]:.2f}m, y={location[1]:.2f}m'
+    
+    # Konwersja na współrzędne geograficzne
+    delta_lat_deg, delta_lon_deg, delta_lat_min, delta_lon_min = meters_to_geographic_degrees(
+        location[0], location[1], reference_lat
+    )
+    
+    absolute_lat = reference_lat + delta_lat_deg
+    absolute_lon = reference_lon + delta_lon_deg
+    
+    return {
+        'success': True,
+        'distances': distances,
+        'location_meters': location.tolist(),
+        'location_geographic': {
+            'lat': absolute_lat,
+            'lon': absolute_lon,
+            'lat_offset_degrees': delta_lat_deg,
+            'lon_offset_degrees': delta_lon_deg,
+            'lat_offset_minutes': delta_lat_min,
+            'lon_offset_minutes': delta_lon_min
+        },
+        'message': message,
+        'num_antennas': len(file_paths)
+    }
+
+#   MAIN - przykład użycia
+
+if __name__ == "__main__":
+    # Przykładowe pliki - zmień na swoje ścieżki
+    example_files = [
+        '/home/szymon/Downloads/GPS_JAMMING/GPS-JAMMING/GpsJammerApp/test1.bin',
+        '/home/szymon/Downloads/GPS_JAMMING/GPS-JAMMING/GpsJammerApp/test2.bin',
+        '/home/szymon/Downloads/GPS_JAMMING/GPS-JAMMING/GpsJammerApp/test3.bin'
+    ]
+    
+    print("=== PRZYKŁAD UŻYCIA TRIANGULACJI JAMMERA ===\n")
+    
+    # Test z 3 antenami
+    print("Test z 3 antenami:")
+    result_3ant = triangulate_jammer_location(
+        example_files,
+        reference_lat=50.06143,  # Kraków
+        reference_lon=19.93658,
+        verbose=True
+    )
+    
+    if result_3ant['success']:
+        loc_geo = result_3ant['location_geographic']
+        print("✅ SUKCES!")
+        print(f"📍 Lokalizacja jammera:")
+        print(f"   Współrzędne geograficzne: {loc_geo['lat']:.8f}°N, {loc_geo['lon']:.8f}°E")
+        print(f"   Przesunięcie: {loc_geo['lat_offset_degrees']:.6f}° ({loc_geo['lat_offset_minutes']:.2f}') lat")
+        print(f"                 {loc_geo['lon_offset_degrees']:.6f}° ({loc_geo['lon_offset_minutes']:.2f}') lon")
+        print(f"   W metrach: x={result_3ant['location_meters'][0]:.2f}m, y={result_3ant['location_meters'][1]:.2f}m")
+        print(f"📏 Odległości: {result_3ant['distances']}")
+    else:
+        print("❌ BŁĄD:", result_3ant['message'])
+    
+    print("\n" + "="*60 + "\n")
+    
+    # Test z 2 antenami
+    print("Test z 2 antenami:")
+    result_2ant = triangulate_jammer_location(
+        example_files[:2],  # tylko pierwsze 2 pliki
+        reference_lat=50.06143,
+        reference_lon=19.93658,
+        verbose=True
+    )
+    
+    if result_2ant['success']:
+        loc_geo = result_2ant['location_geographic']
+        print("✅ SUKCES!")
+        print(f"📍 Lokalizacja jammera:")
+        print(f"   Współrzędne geograficzne: {loc_geo['lat']:.8f}°N, {loc_geo['lon']:.8f}°E")
+        print(f"   Przesunięcie: {loc_geo['lat_offset_degrees']:.6f}° ({loc_geo['lat_offset_minutes']:.2f}') lat")
+        print(f"                 {loc_geo['lon_offset_degrees']:.6f}° ({loc_geo['lon_offset_minutes']:.2f}') lon")
+        print(f"   W metrach: x={result_2ant['location_meters'][0]:.2f}m, y={result_2ant['location_meters'][1]:.2f}m")
+        print(f"📏 Odległości: {result_2ant['distances']}")
+    else:
+        print("❌ BŁĄD:", result_2ant['message'])
+
+"""
+=== PRZYKŁAD UŻYCIA W INNYM KODZIE ===
+
+from triangulateRSSI import triangulate_jammer_location
+
+# Przykład 1: Podstawowe użycie z 3 plikami
+files = ['antenna0.bin', 'antenna1.bin', 'antenna2.bin']
+result = triangulate_jammer_location(files, reference_lat=50.06143, reference_lon=19.93658)
+
+if result['success']:
+    geo = result['location_geographic']
+    print(f"Jammer wykryty na: {geo['lat']:.6f}°N, {geo['lon']:.6f}°E")
+    print(f"Przesunięcie: {geo['lat_offset_minutes']:.1f}' lat, {geo['lon_offset_minutes']:.1f}' lon")
+else:
+    print(f"Błąd: {result['message']}")
+
+# Przykład 2: Dostosowane parametry
+result = triangulate_jammer_location(
+    files, 
+    reference_lat=50.0,
+    reference_lon=20.0,
+    tx_power=45.0,              # moc jammera w dBm
+    path_loss_exp=2.5,          # wykładnik tłumienia
+    frequency_mhz=1575.42,      # częstotliwość GPS L1
+    threshold=0.05,             # próg detekcji
+    verbose=False               # bez szczegółowych logów
+)
+
+# Przykład 3: Własne pozycje anten (w metrach od punktu referencyjnego)
+custom_antenna_positions = [
+    np.array([0.0, 0.0]),       # Antena 0: punkt odniesienia
+    np.array([1.0, 0.0]),       # Antena 1: 1m na wschód
+    np.array([0.5, 0.866])      # Antena 2: trójkąt równoboczny
+]
+
+result = triangulate_jammer_location(
+    files,
+    antenna_positions_meters=custom_antenna_positions,
+    reference_lat=50.06143,
+    reference_lon=19.93658
+)
+
+# Przykład 4: Tylko 2 anteny
+result_2ant = triangulate_jammer_location(
+    files[:2],  # tylko 2 pliki
+    reference_lat=50.06143,
+    reference_lon=19.93658
+)
+
+# Przykład 5: Integracja z istniejącym kodem
+def detect_jammer_location(file_list, base_lat, base_lon):
+    result = triangulate_jammer_location(file_list, base_lat, base_lon, verbose=False)
+    
+    if result['success']:
+        return {
+            'found': True,
+            'lat': result['location_geographic']['lat'],
+            'lon': result['location_geographic']['lon'],
+            'distances': result['distances'],
+            'method': f"{result['num_antennas']}-antenna triangulation"
+        }
+    else:
+        return {
+            'found': False,
+            'error': result['message']
+        }
+
+# Użycie:
+jammer_info = detect_jammer_location(['ant0.bin', 'ant1.bin'], 50.0, 19.0)
+if jammer_info['found']:
+    print(f"Jammer at: {jammer_info['lat']}, {jammer_info['lon']}")
+"""
