@@ -592,7 +592,7 @@ class MainWindow(QMainWindow):
                         self.web_view.page().runJavaScript(js_add_circle)
 
             triangulation_text = (
-                f"\n📍 TRIANGULACJA ZAKOŃCZONA:\n"
+                f"\n TRIANGULACJA ZAKOŃCZONA:\n"
                 f"  Pozycja jammera: {geo['lat']:.8f}, {geo['lon']:.8f}\n"
                 f"  Odległości od anten: {[f'{d:.1f}m' for d in distances if d is not None]}\n"
                 f"  Metoda: {result['num_antennas']}-antenna triangulation"
@@ -619,7 +619,7 @@ class MainWindow(QMainWindow):
                 end_sample = result.get('end_sample')
                 
                 if end_sample is not None:
-                    jamming_text = f"Znaleziono jamming [{start_sample}, {end_sample}]"
+                    jamming_text = f"Znaleziono jamming"
                 else:
                     jamming_text = f"Znaleziono jamming [{start_sample}, koniec pliku]"
                     
@@ -677,8 +677,8 @@ Parametry analizy:
             final_text = (
                 f"Lokalizacja jammera została określona\n"
                 f"Współrzędne: {geo['lat']:.8f}, {geo['lon']:.8f}\n"
-                f"🔧 Metoda: {triangulation['num_antennas']}-antenna triangulation\n"
-                f"📊 Dokładność: ±{max(distances) - min([d for d in distances if d]):.1f}m\n"
+                f"Metoda: {triangulation['num_antennas']}-antenna triangulation\n"
+                f"Dokładność: ±{max(distances) - min([d for d in distances if d]):.1f}m\n"
             )
             
             current_text = self.results_text.toPlainText()
