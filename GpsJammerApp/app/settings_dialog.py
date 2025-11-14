@@ -1,14 +1,17 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
                              QLabel, QDoubleSpinBox, QSpinBox, 
-                             QPushButton, QGroupBox, QGridLayout)
+                             QPushButton, QGroupBox, QGridLayout, QMessageBox)
 from PySide6.QtCore import Qt
+import os
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, num_files=0, file_paths=None):
         super().__init__(parent)
         self.setWindowTitle("Ustawienia Analizy GPS")
         self.setModal(True)
         self.resize(400, 350)
+        self.num_files = num_files
+        self.file_paths = file_paths if file_paths else []
         
         self.setStyleSheet("""
         QDialog {
@@ -48,10 +51,14 @@ class SettingsDialog(QDialog):
         antenna_layout.addWidget(QLabel("<b>X [m]</b>"), 0, 1)
         antenna_layout.addWidget(QLabel("<b>Y [m]</b>"), 0, 2)
 
-        antenna_layout.addWidget(QLabel("Antena 1 (ref):"), 1, 0)
-        antenna_layout.addWidget(QLabel("0.0"), 1, 1)
-        antenna_layout.addWidget(QLabel("0.0"), 1, 2)
-        antenna_layout.addWidget(QLabel("Antena 2:"), 2, 0)
+        self.antenna1_label = QLabel("Antena 1 (ref):")
+        antenna_layout.addWidget(self.antenna1_label, 1, 0)
+        self.antenna1_x_label = QLabel("0.0")
+        antenna_layout.addWidget(self.antenna1_x_label, 1, 1)
+        self.antenna1_y_label = QLabel("0.0")
+        antenna_layout.addWidget(self.antenna1_y_label, 1, 2)
+        self.antenna2_label = QLabel("Antena 2:")
+        antenna_layout.addWidget(self.antenna2_label, 2, 0)
         self.antenna2_x = QDoubleSpinBox()
         self.antenna2_x.setRange(-50.0, 50.0)
         self.antenna2_x.setValue(0.5)
@@ -67,7 +74,8 @@ class SettingsDialog(QDialog):
         self.antenna2_y.setStyleSheet(self.get_spinbox_style())
         antenna_layout.addWidget(self.antenna2_y, 2, 2)
         
-        antenna_layout.addWidget(QLabel("Antena 3:"), 3, 0)
+        self.antenna3_label = QLabel("Antena 3:")
+        antenna_layout.addWidget(self.antenna3_label, 3, 0)
         self.antenna3_x = QDoubleSpinBox()
         self.antenna3_x.setRange(-50.0, 50.0)
         self.antenna3_x.setValue(0.0)  
@@ -84,36 +92,51 @@ class SettingsDialog(QDialog):
         self.antenna3_y.setStyleSheet(self.get_spinbox_style())
         antenna_layout.addWidget(self.antenna3_y, 3, 2)
         
+        self.update_antenna_state()
+        
         layout.addWidget(antenna_group)
 
         analysis_group = QGroupBox("Parametry Analizy")
         analysis_layout = QGridLayout(analysis_group)
+        analysis_layout.setVerticalSpacing(15)
 
-        analysis_layout.addWidget(QLabel("Częstotliwość [MHz]:"), 0, 0)
-        self.frequency = QDoubleSpinBox()
-        self.frequency.setRange(1500, 1600)
-        self.frequency.setValue(1575.42)  
-        self.frequency.setDecimals(2)
-        self.frequency.setSuffix(" MHz")
-        self.frequency.setStyleSheet(self.get_spinbox_style())
-        analysis_layout.addWidget(self.frequency, 0, 1)
+        analysis_layout.addWidget(QLabel("Częstotliwość:"), 0, 0)
+        analysis_layout.addWidget(QLabel("1575.42 MHz"), 0, 1)
 
-        analysis_layout.addWidget(QLabel("Próg wykrywania [%]:"), 1, 0)
-        self.threshold = QSpinBox()
-        self.threshold.setRange(1, 100)
-        self.threshold.setValue(30)
-        self.threshold.setSuffix(" %")
+        analysis_layout.addWidget(QLabel("Częstotliwość próbkowania:"), 1, 0)
+        analysis_layout.addWidget(QLabel("2.048 MHz"), 1, 1)
+
+        analysis_layout.addWidget(QLabel("Próg Detekcji (względny):"), 2, 0)
+        self.threshold = QDoubleSpinBox()
+        self.threshold.setRange(1.0, 5000.0)
+        self.threshold.setValue(120.0)
+        self.threshold.setDecimals(1)
+        self.threshold.setSingleStep(1.0)
         self.threshold.setStyleSheet(self.get_spinbox_style())
-        analysis_layout.addWidget(self.threshold, 1, 1)
-
-        analysis_layout.addWidget(QLabel("Częst. próbkowania [MHz]:"), 2, 0)
-        self.sample_rate = QDoubleSpinBox()
-        self.sample_rate.setRange(1, 50)
-        self.sample_rate.setValue(2.048)
-        self.sample_rate.setDecimals(3)
-        self.sample_rate.setSuffix(" MHz")
-        self.sample_rate.setStyleSheet(self.get_spinbox_style())
-        analysis_layout.addWidget(self.sample_rate, 2, 1)
+        analysis_layout.addWidget(self.threshold, 2, 1)
+        
+        self.calibrate_btn = QPushButton("Oblicz próg")
+        self.calibrate_btn.clicked.connect(self.on_calibrate_clicked)
+        self.calibrate_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 13px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        QPushButton:hover {
+            background-color: #2980b9;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        QPushButton:pressed {
+            background-color: #21618c;
+        }
+        """)
+        analysis_layout.addWidget(self.calibrate_btn, 3, 0, 1, 2)
         
         layout.addWidget(analysis_group)
         
@@ -168,8 +191,97 @@ class SettingsDialog(QDialog):
         
         layout.addLayout(button_layout)
     
+    def on_calibrate_clicked(self):
+        """Obsługa kliknięcia przycisku Kalibruj."""
+        if self.num_files == 0:
+            QMessageBox.warning(self, "Brak plików", "Brak plików do kalibracji")
+        elif self.num_files >= 1:
+            import subprocess
+            import re
+            
+            first_file = self.file_paths[0]
+            script_path = os.path.join(os.path.dirname(__file__), 'checkIfJamming.py')
+            
+            try:
+                result = subprocess.run(
+                    ['python', script_path, first_file, '--kalibruj'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                output = result.stdout
+                print(output)
+                
+                match = re.search(r'Sugerowany <próg_mocy> \(Mediana \* 4\.8\):\s*([\d.]+)', output)
+                
+                if match:
+                    suggested_threshold = float(match.group(1))
+                    self.threshold.setValue(suggested_threshold)
+                    QMessageBox.information(
+                        self, 
+                        "Kalibracja zakończona", 
+                        f"Obliczony próg detekcji: {suggested_threshold:.2f}\n\n"
+                        f"Wartość została automatycznie wpisana."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, 
+                        "Błąd kalibracji", 
+                        "Nie udało się odczytać wartości progu z wyniku kalibracji."
+                    )
+                    
+            except subprocess.TimeoutExpired:
+                QMessageBox.critical(self, "Błąd", "Kalibracja przekroczyła limit czasu (120s)")
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Błąd podczas kalibracji:\n{str(e)}")
+    
+    def update_antenna_state(self):
+        disabled_label_style = "color: #95a5a6;"
+        enabled_label_style = "color: #2c3e50; font-weight: bold;"
+        
+        if self.num_files == 0:
+            self.antenna1_label.setStyleSheet(disabled_label_style)
+            self.antenna1_x_label.setStyleSheet(disabled_label_style)
+            self.antenna1_y_label.setStyleSheet(disabled_label_style)
+            self.antenna2_label.setStyleSheet(disabled_label_style)
+            self.antenna3_label.setStyleSheet(disabled_label_style)
+            self.antenna2_x.setEnabled(False)
+            self.antenna2_y.setEnabled(False)
+            self.antenna3_x.setEnabled(False)
+            self.antenna3_y.setEnabled(False)
+        elif self.num_files == 1:
+            self.antenna1_label.setStyleSheet(enabled_label_style)
+            self.antenna1_x_label.setStyleSheet(enabled_label_style)
+            self.antenna1_y_label.setStyleSheet(enabled_label_style)
+            self.antenna2_label.setStyleSheet(disabled_label_style)
+            self.antenna3_label.setStyleSheet(disabled_label_style)
+            self.antenna2_x.setEnabled(False)
+            self.antenna2_y.setEnabled(False)
+            self.antenna3_x.setEnabled(False)
+            self.antenna3_y.setEnabled(False)
+        elif self.num_files == 2:
+            self.antenna1_label.setStyleSheet(enabled_label_style)
+            self.antenna1_x_label.setStyleSheet(enabled_label_style)
+            self.antenna1_y_label.setStyleSheet(enabled_label_style)
+            self.antenna2_label.setStyleSheet(enabled_label_style)
+            self.antenna3_label.setStyleSheet(disabled_label_style)
+            self.antenna2_x.setEnabled(True)
+            self.antenna2_y.setEnabled(True)
+            self.antenna3_x.setEnabled(False)
+            self.antenna3_y.setEnabled(False)
+        else:
+            self.antenna1_label.setStyleSheet(enabled_label_style)
+            self.antenna1_x_label.setStyleSheet(enabled_label_style)
+            self.antenna1_y_label.setStyleSheet(enabled_label_style)
+            self.antenna2_label.setStyleSheet(enabled_label_style)
+            self.antenna3_label.setStyleSheet(enabled_label_style)
+            self.antenna2_x.setEnabled(True)
+            self.antenna2_y.setEnabled(True)
+            self.antenna3_x.setEnabled(True)
+            self.antenna3_y.setEnabled(True)
+    
     def get_spinbox_style(self):
-        """Zwraca styl dla pól SpinBox."""
         return """
         QDoubleSpinBox, QSpinBox {
             border: 2px solid #bdc3c7;
@@ -183,10 +295,14 @@ class SettingsDialog(QDialog):
         QDoubleSpinBox:focus, QSpinBox:focus {
             border-color: #3498db;
         }
+        QDoubleSpinBox:disabled, QSpinBox:disabled {
+            background-color: #ecf0f1;
+            color: #95a5a6;
+            border-color: #bdc3c7;
+        }
         """
     
     def get_settings(self):
-        """Zwraca słownik z ustawieniami."""
         import math
 
         antenna_positions = {
@@ -210,17 +326,15 @@ class SettingsDialog(QDialog):
                 '2_to_3': distance_23
             },
             'analysis_params': {
-                'frequency': self.frequency.value(),
-                'threshold': self.threshold.value(),
-                'sample_rate': self.sample_rate.value()
+                'frequency': 1575.42,
+                'threshold': int(self.threshold.value()),
+                'sample_rate': 2.048
             }
         }
     
     def set_settings(self, settings):
-        """Ustawia wartości pól na podstawie słownika ustawień."""
         if 'antenna_positions' in settings:
             positions = settings['antenna_positions']
-            # Antena 1 - punkt odniesienia
             antenna2_pos = positions.get('antenna2', [0.5, 0.0])
             antenna3_pos = positions.get('antenna3', [0.0, 0.5])
             
@@ -231,6 +345,5 @@ class SettingsDialog(QDialog):
         
         if 'analysis_params' in settings:
             params = settings['analysis_params']
-            self.frequency.setValue(params.get('frequency', 1575.42))
-            self.threshold.setValue(params.get('threshold', 30))
-            self.sample_rate.setValue(params.get('sample_rate', 2.048))
+            threshold_value = params.get('threshold', 120)
+            self.threshold.setValue(float(threshold_value))
