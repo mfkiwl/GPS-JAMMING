@@ -13,6 +13,7 @@
 #define POLYCRC24Q  0x1864CFBu  // CRC24Q polynomial     
 
 const static double gpst0[]={1980,1, 6,0,0,0}; // gps time reference     
+const static double gst0[]={1999,8,22,0,0,0}; // galileo system time reference
 
 const static double leaps[][7]={ // leap seconds {y,m,d,h,m,s,utc-gpst,...}     
     {2016,1,1,0,0,0,-18},
@@ -42,8 +43,12 @@ static const unsigned int tbl_CRC24Q[]={
     0x64CFB0,0xE2834B,0xEE1ABD,0x685646,0xF72951,0x7165AA,0x7DFC5C,0xFBB0A7,
     0x0CD1E9,0x8A9D12,0x8604E4,0x00481F,0x9F3708,0x197BF3,0x15E205,0x93AEFE,
     0xAD50D0,0x2B1C2B,0x2785DD,0xA1C926,0x3EB631,0xB8FACA,0xB4633C,0x322FC7,
-    0xC99F60,0x4FD39B,0x434A6D,0xC50696,0x5A7981,0xDC357A,0xD0AC8C,0x56E077,
-    0x681E59,0xEE52A2,0xE2CB54,0x6487AF,0xFBF8B8,0x7DB443,0x712DB5,0xF7614E,
+    0xC99F60,0x4FD39B,0x434A6D,0xC50696,0x5A7981,0xD0E493,0xDC7D65,0x5A319E,
+    0x64CFB0,0xE2834B,0xEE1ABD,0x685646,0xF72951,0x7165AA,0x7DFC5C,0xFBB0A7,
+    0x0CD1E9,0x8A9D12,0x8604E4,0x00481F,0x9F3708,0x197BF3,0x15E205,0x93AEFE,
+    0xAD50D0,0x2B1C2B,0x2785DD,0xA1C926,0x3EB631,0xB8FACA,0xB4633C,0x322FC7,
+    0xC99F60,0x4FD39B,0x434A6D,0xC50696,0x5A7981,0xD0E493,0xDC7D65,0x5A319E,
+    0x64CFB0,0xE2834B,0xEE1ABD,0x685646,0xF72951,0x7165AA,0x7DFC5C,0xFBB0A7,
     0x19A3D2,0x9FEF29,0x9376DF,0x153A24,0x8A4533,0x0C09C8,0x00903E,0x86DCC5,
     0xB822EB,0x3E6E10,0x32F7E6,0xB4BB1D,0x2BC40A,0xAD88F1,0xA11107,0x275DFC,
     0xDCED5B,0x5AA1A0,0x563856,0xD074AD,0x4F0BBA,0xC94741,0xC5DEB7,0x43924C,
@@ -83,10 +88,15 @@ extern int satno(int sys, int prn)
         case SYS_GPS:
             if (prn<MINPRNGPS||MAXPRNGPS<prn) return 0;
             return prn-MINPRNGPS+1;
+        case SYS_GLO:
+            if (prn<MINPRNGLO||MAXPRNGLO<prn) return 0;
+            return NSATGPS+prn-MINPRNGLO+1;
+        case SYS_GAL:
+            if (prn<MINPRNGAL||MAXPRNGAL<prn) return 0;
+            return NSATGPS+NSATGLO+prn-MINPRNGAL+1;
         case SYS_SBS:
             if (prn<MINPRNSBS||MAXPRNSBS<prn) return 0;
-            //return NSATGPS+NSATGLO+NSATGAL+NSATQZS+NSATCMP+NSATLEO+prn-MINPRNSBS+1;
-            return NSATGPS+prn-MINPRNSBS+1; // DK added
+            return NSATGPS+NSATGLO+NSATGAL+prn-MINPRNSBS+1;
     }
     return 0;
 }
@@ -108,6 +118,15 @@ extern int satsys(int sat, int *prn)
     //else if ((sat-=NSATLEO)<=NSATSBS) {
     //    sys=SYS_SBS; sat+=MINPRNSBS-1;
     //}
+    else if (sat<=NSATGPS+NSATGLO) {
+        sys=SYS_GLO; sat=sat-NSATGPS+MINPRNGLO-1;
+    }
+    else if (sat<=NSATGPS+NSATGLO+NSATGAL) {
+        sys=SYS_GAL; sat=sat-NSATGPS-NSATGLO+MINPRNGAL-1;
+    }
+    else if (sat<=NSATGPS+NSATGLO+NSATGAL+NSATSBS) {
+        sys=SYS_SBS; sat=sat-NSATGPS-NSATGLO-NSATGAL+MINPRNSBS-1;
+    }
     else sat=0;
     if (prn) *prn=sat;
     return sys;
@@ -126,6 +145,8 @@ extern int satid2no(const char *id)
     
     if (sscanf(id,"%d",&prn)==1) {
         if      (MINPRNGPS<=prn&&prn<=MAXPRNGPS) sys=SYS_GPS;
+        else if (MINPRNGLO<=prn&&prn<=MAXPRNGLO) sys=SYS_GLO;
+        else if (MINPRNGAL<=prn&&prn<=MAXPRNGAL) sys=SYS_GAL;
         else if (MINPRNSBS<=prn&&prn<=MAXPRNSBS) sys=SYS_SBS;
         //else if (MINPRNQZS<=prn&&prn<=MAXPRNQZS) sys=SYS_QZS;
         else return 0;
@@ -135,6 +156,8 @@ extern int satid2no(const char *id)
     
     switch (code) {
         case 'G': sys=SYS_GPS; prn+=MINPRNGPS-1; break;
+        case 'R': sys=SYS_GLO; prn+=MINPRNGLO-1; break;
+        case 'E': sys=SYS_GAL; prn+=MINPRNGAL-1; break;
         case 'S': sys=SYS_SBS; prn+=100; break;
         default: return 0;
     }
@@ -152,6 +175,8 @@ extern void satno2id(int sat, char *id)
     int prn;
     switch (satsys(sat,&prn)) {
         case SYS_GPS: sprintf(id,"G%02d",prn-MINPRNGPS+1); return;
+        case SYS_GLO: sprintf(id,"R%02d",prn-MINPRNGLO+1); return;
+        case SYS_GAL: sprintf(id,"E%02d",prn-MINPRNGAL+1); return;
         case SYS_SBS: sprintf(id,"%03d" ,prn); return;
     }
     strcpy(id,"");
@@ -264,6 +289,31 @@ extern gtime_t epoch2time(const double *ep)
     return time;
 }
 
+// time to calendar day/time ---------------------------------------------------
+//convert gtime_t struct to calendar day/time
+//args   : gtime_t t        I   gtime_t struct
+//         double *ep        O   day/time {year,month,day,hour,min,sec}
+//return : none
+//notes  : proper in 1970-2037 or 1970-2099 (64bit time_t)
+//----------------------------------------------------------------------------
+extern void time2epoch(gtime_t t, double *ep)
+{
+    const int mday[]={ /* # of days in a month */
+        31,28,31,30,31,30,31,31,30,31,30,31,31,28,31,30,31,30,31,31,30,31,30,31,
+        31,29,31,30,31,30,31,31,30,31,30,31,31,28,31,30,31,30,31,31,30,31,30,31
+    };
+    int days,sec,mon,day;
+    
+    /* leap year if year%4==0 in 1901-2099 */
+    days=(int)(t.time/86400);
+    sec=(int)(t.time-(time_t)days*86400);
+    for (day=days%1461,mon=0;mon<48;mon++) {
+        if (day>=mday[mon]) day-=mday[mon]; else break;
+    }
+    ep[0]=1970+days/1461*4+mon/12; ep[1]=mon%12+1; ep[2]=day+1;
+    ep[3]=sec/3600; ep[4]=sec%3600/60; ep[5]=sec%60+t.sec;
+}
+
 // gps time to time ------------------------------------------------------------
 //convert week and tow in gps time to gtime_t struct
 //args   : int    week      I   week number in gps time
@@ -294,6 +344,22 @@ extern double time2gpst(gtime_t t, int *week)
     
     if (week) *week=w;
     return (double)(sec-w*86400*7)+t.sec;
+}
+
+// galileo system time to time -------------------------------------------------
+//convert week and tow in galileo system time to gtime_t struct
+//args   : int    week      I   week number in galileo system time
+//         double sec       I   time of week in galileo system time (s)
+//return : gtime_t struct
+//----------------------------------------------------------------------------
+extern gtime_t gst2time(int week, double sec)
+{
+    gtime_t t=epoch2time(gst0);
+    
+    if (sec<-1E9||1E9<sec) sec=0.0;
+    t.time+=86400*7*week+(int)sec;
+    t.sec=sec-(int)sec;
+    return t;
 }
 
 // add time --------------------------------------------------------------------
