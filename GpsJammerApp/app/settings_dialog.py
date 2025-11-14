@@ -1,15 +1,17 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
                              QLabel, QDoubleSpinBox, QSpinBox, 
-                             QPushButton, QGroupBox, QGridLayout)
+                             QPushButton, QGroupBox, QGridLayout, QMessageBox)
 from PySide6.QtCore import Qt
+import os
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None, num_files=0):
+    def __init__(self, parent=None, num_files=0, file_paths=None):
         super().__init__(parent)
         self.setWindowTitle("Ustawienia Analizy GPS")
         self.setModal(True)
         self.resize(400, 350)
         self.num_files = num_files
+        self.file_paths = file_paths if file_paths else []
         
         self.setStyleSheet("""
         QDialog {
@@ -90,7 +92,6 @@ class SettingsDialog(QDialog):
         self.antenna3_y.setStyleSheet(self.get_spinbox_style())
         antenna_layout.addWidget(self.antenna3_y, 3, 2)
         
-        # Ustawienie stanu enabled/disabled dla anten na podstawie liczby plików
         self.update_antenna_state()
         
         layout.addWidget(antenna_group)
@@ -108,13 +109,14 @@ class SettingsDialog(QDialog):
         analysis_layout.addWidget(QLabel("Próg Detekcji (względny):"), 2, 0)
         self.threshold = QDoubleSpinBox()
         self.threshold.setRange(1.0, 5000.0)
-        self.threshold.setValue(30.0)
+        self.threshold.setValue(120.0)
         self.threshold.setDecimals(1)
         self.threshold.setSingleStep(1.0)
         self.threshold.setStyleSheet(self.get_spinbox_style())
         analysis_layout.addWidget(self.threshold, 2, 1)
         
         self.calibrate_btn = QPushButton("Oblicz próg")
+        self.calibrate_btn.clicked.connect(self.on_calibrate_clicked)
         self.calibrate_btn.setStyleSheet("""
         QPushButton {
             background-color: #3498db;
@@ -189,13 +191,56 @@ class SettingsDialog(QDialog):
         
         layout.addLayout(button_layout)
     
+    def on_calibrate_clicked(self):
+        """Obsługa kliknięcia przycisku Kalibruj."""
+        if self.num_files == 0:
+            QMessageBox.warning(self, "Brak plików", "Brak plików do kalibracji")
+        elif self.num_files >= 1:
+            import subprocess
+            import re
+            
+            first_file = self.file_paths[0]
+            script_path = os.path.join(os.path.dirname(__file__), 'checkIfJamming.py')
+            
+            try:
+                result = subprocess.run(
+                    ['python', script_path, first_file, '--kalibruj'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                output = result.stdout
+                print(output)
+                
+                match = re.search(r'Sugerowany <próg_mocy> \(Mediana \* 4\.8\):\s*([\d.]+)', output)
+                
+                if match:
+                    suggested_threshold = float(match.group(1))
+                    self.threshold.setValue(suggested_threshold)
+                    QMessageBox.information(
+                        self, 
+                        "Kalibracja zakończona", 
+                        f"Obliczony próg detekcji: {suggested_threshold:.2f}\n\n"
+                        f"Wartość została automatycznie wpisana."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, 
+                        "Błąd kalibracji", 
+                        "Nie udało się odczytać wartości progu z wyniku kalibracji."
+                    )
+                    
+            except subprocess.TimeoutExpired:
+                QMessageBox.critical(self, "Błąd", "Kalibracja przekroczyła limit czasu (120s)")
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd", f"Błąd podczas kalibracji:\n{str(e)}")
+    
     def update_antenna_state(self):
-        """Aktualizuje stan enabled/disabled pól anten na podstawie liczby plików."""
-        disabled_label_style = "color: #95a5a6;"  # Szary kolor dla wyłączonych napisów
-        enabled_label_style = "color: #2c3e50; font-weight: bold;"  # Normalny kolor dla aktywnych
+        disabled_label_style = "color: #95a5a6;"
+        enabled_label_style = "color: #2c3e50; font-weight: bold;"
         
         if self.num_files == 0:
-            # Brak plików - wszystkie pola wyłączone
             self.antenna1_label.setStyleSheet(disabled_label_style)
             self.antenna1_x_label.setStyleSheet(disabled_label_style)
             self.antenna1_y_label.setStyleSheet(disabled_label_style)
@@ -206,7 +251,6 @@ class SettingsDialog(QDialog):
             self.antenna3_x.setEnabled(False)
             self.antenna3_y.setEnabled(False)
         elif self.num_files == 1:
-            # 1 plik - Antena 1 normalna z wartościami; triangulacja wymaga min. 2 plików
             self.antenna1_label.setStyleSheet(enabled_label_style)
             self.antenna1_x_label.setStyleSheet(enabled_label_style)
             self.antenna1_y_label.setStyleSheet(enabled_label_style)
@@ -217,7 +261,6 @@ class SettingsDialog(QDialog):
             self.antenna3_x.setEnabled(False)
             self.antenna3_y.setEnabled(False)
         elif self.num_files == 2:
-            # 2 pliki - tylko antena 2 dostępna
             self.antenna1_label.setStyleSheet(enabled_label_style)
             self.antenna1_x_label.setStyleSheet(enabled_label_style)
             self.antenna1_y_label.setStyleSheet(enabled_label_style)
@@ -228,7 +271,6 @@ class SettingsDialog(QDialog):
             self.antenna3_x.setEnabled(False)
             self.antenna3_y.setEnabled(False)
         else:
-            # 3 lub więcej plików - antena 2 i 3 dostępne
             self.antenna1_label.setStyleSheet(enabled_label_style)
             self.antenna1_x_label.setStyleSheet(enabled_label_style)
             self.antenna1_y_label.setStyleSheet(enabled_label_style)
@@ -240,7 +282,6 @@ class SettingsDialog(QDialog):
             self.antenna3_y.setEnabled(True)
     
     def get_spinbox_style(self):
-        """Zwraca styl dla pól SpinBox."""
         return """
         QDoubleSpinBox, QSpinBox {
             border: 2px solid #bdc3c7;
@@ -262,7 +303,6 @@ class SettingsDialog(QDialog):
         """
     
     def get_settings(self):
-        """Zwraca słownik z ustawieniami."""
         import math
 
         antenna_positions = {
@@ -293,10 +333,8 @@ class SettingsDialog(QDialog):
         }
     
     def set_settings(self, settings):
-        """Ustawia wartości pól na podstawie słownika ustawień."""
         if 'antenna_positions' in settings:
             positions = settings['antenna_positions']
-            # Antena 1 - punkt odniesienia
             antenna2_pos = positions.get('antenna2', [0.5, 0.0])
             antenna3_pos = positions.get('antenna3', [0.0, 0.5])
             

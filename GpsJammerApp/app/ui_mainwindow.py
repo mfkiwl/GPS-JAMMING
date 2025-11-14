@@ -113,8 +113,10 @@ class MainWindow(QMainWindow):
             color: #bdc3c7;
         }
         """
-        map_button_style = """
+
+        osm_button_style = """
         QPushButton {
+            background-color: #3498db;
             color: white;
             border: none;
             border-radius: 8px;
@@ -124,11 +126,116 @@ class MainWindow(QMainWindow):
             margin: 2px;
         }
         QPushButton:hover {
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            transform: translateY(-1px);
+            background-color: #2980b9;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
         }
-        QPushButton:pressed {
-            transform: translateY(0px);
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #21618c;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.3);
+        }
+        """
+
+        satellite_button_style = """
+        QPushButton {
+            background-color: #9b59b6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            margin: 2px;
+        }
+        QPushButton:hover {
+            background-color: #8e44ad;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #71368a;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.3);
+        }
+        """
+
+        topo_button_style = """
+        QPushButton {
+            background-color: #16a085;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            margin: 2px;
+        }
+        QPushButton:hover {
+            background-color: #138d75;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #117a65;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.3);
+        }
+        """
+
+        gps_button_style = """
+        QPushButton {
+            background-color: #27ae60;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            margin: 2px;
+        }
+        QPushButton:hover {
+            background-color: #229954;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #1e8449;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.3);
+        }
+        """
+        glonass_button_style = """
+        QPushButton {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            margin: 2px;
+        }
+        QPushButton:hover {
+            background-color: #2980b9;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #21618c;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.3);
+        }
+        """
+
+        galileo_button_style = """
+        QPushButton {
+            background-color: #9b59b6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            margin: 2px;
+        }
+        QPushButton:hover {
+            background-color: #8e44ad;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
+        }
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #71368a;
+            box-shadow: inset 0 3px 5px rgba(0,0,0,0.3);
         }
         """
 
@@ -229,18 +336,22 @@ class MainWindow(QMainWindow):
         map_layout = QHBoxLayout(map_group) 
         
         self.osm_btn = QPushButton("🗺️ OSM")
+        self.osm_btn.setCheckable(True)
+        self.osm_btn.setChecked(True)
         self.osm_btn.clicked.connect(lambda: self.change_map_layer('osm'))
-        self.osm_btn.setStyleSheet(map_button_style + "QPushButton { background-color: #3498db; }")
+        self.osm_btn.setStyleSheet(osm_button_style)
         map_layout.addWidget(self.osm_btn)
         
         self.satellite_btn = QPushButton("🛰️ Satelita")
+        self.satellite_btn.setCheckable(True)
         self.satellite_btn.clicked.connect(lambda: self.change_map_layer('satellite'))
-        self.satellite_btn.setStyleSheet(map_button_style + "QPushButton { background-color: #9b59b6; }")
+        self.satellite_btn.setStyleSheet(satellite_button_style)
         map_layout.addWidget(self.satellite_btn)
         
         self.topo_btn = QPushButton("🏔️ Topo")
+        self.topo_btn.setCheckable(True)
         self.topo_btn.clicked.connect(lambda: self.change_map_layer('topo'))
-        self.topo_btn.setStyleSheet(map_button_style + "QPushButton { background-color: #16a085; }")
+        self.topo_btn.setStyleSheet(topo_button_style)
         map_layout.addWidget(self.topo_btn)
         layout.addWidget(map_group)
 
@@ -252,19 +363,19 @@ class MainWindow(QMainWindow):
         self.gps_btn.setCheckable(True)
         self.gps_btn.setChecked(True)
         self.gps_btn.clicked.connect(lambda: self.select_satellite_system('GPS'))
-        self.gps_btn.setStyleSheet(map_button_style + "QPushButton { background-color: #27ae60; }")
+        self.gps_btn.setStyleSheet(gps_button_style)
         satellite_system_layout.addWidget(self.gps_btn)
 
         self.glonass_btn = QPushButton("🇷🇺 GLONASS")
         self.glonass_btn.setCheckable(True)
         self.glonass_btn.clicked.connect(lambda: self.select_satellite_system('GLONASS'))
-        self.glonass_btn.setStyleSheet(map_button_style + "QPushButton { background-color: #3498db; }")
+        self.glonass_btn.setStyleSheet(glonass_button_style)
         satellite_system_layout.addWidget(self.glonass_btn)
         
         self.galileo_btn = QPushButton("🇪🇺 Galileo")
         self.galileo_btn.setCheckable(True)
         self.galileo_btn.clicked.connect(lambda: self.select_satellite_system('Galileo'))
-        self.galileo_btn.setStyleSheet(map_button_style + "QPushButton { background-color: #9b59b6; }")
+        self.galileo_btn.setStyleSheet(galileo_button_style)
         satellite_system_layout.addWidget(self.galileo_btn)
         
         layout.addWidget(satellite_system_group)
@@ -398,11 +509,23 @@ class MainWindow(QMainWindow):
             self.control_panel.setMinimumWidth(450)
 
     def resizeEvent(self, event):
-        """Obsługuje zmianę rozmiaru okna - responsywność."""
         super().resizeEvent(event)
         self.update_layout_proportions()
         
     def change_map_layer(self, layer_type):
+        # Odznacz wszystkie przyciski map
+        self.osm_btn.setChecked(False)
+        self.satellite_btn.setChecked(False)
+        self.topo_btn.setChecked(False)
+        
+        # Zaznacz aktywny przycisk
+        if layer_type == 'osm':
+            self.osm_btn.setChecked(True)
+        elif layer_type == 'satellite':
+            self.satellite_btn.setChecked(True)
+        elif layer_type == 'topo':
+            self.topo_btn.setChecked(True)
+        
         self.web_view.page().runJavaScript(f"changeMapLayer('{layer_type}');")
     
     def select_satellite_system(self, system):
@@ -422,12 +545,12 @@ class MainWindow(QMainWindow):
         
         print(f"Wybrany system satelitarny: {self.selected_satellite_system}")
     
-    def open_settings(self): # Okno od ustawień w aplikacji
+    def open_settings(self):
         try:
             from .settings_dialog import SettingsDialog
-            # Pobierz liczbę wybranych plików (0 jeśli brak)
             num_files = len(self.current_files) if hasattr(self, 'current_files') else 0
-            dialog = SettingsDialog(self, num_files=num_files)
+            file_paths = self.current_files if hasattr(self, 'current_files') else []
+            dialog = SettingsDialog(self, num_files=num_files, file_paths=file_paths)
 
             dialog.set_settings(self.current_settings)
             
@@ -445,11 +568,7 @@ class MainWindow(QMainWindow):
                     f"   Antena 1: (0.0, 0.0) m [ref]\n"
                     f"   Antena 2: ({positions['antenna2'][0]:.3f}, {positions['antenna2'][1]:.3f}) m\n"
                     f"   Antena 3: ({positions['antenna3'][0]:.3f}, {positions['antenna3'][1]:.3f}) m\n"
-                    f"Odległości:\n"
-                    f"   A1-A2: {distances['1_to_2']:.3f} m\n"
-                    f"   A1-A3: {distances['1_to_3']:.3f} m\n"
-                    f"   A2-A3: {distances['2_to_3']:.3f} m\n"
-                    f"Parametry: {settings['analysis_params']['frequency']:.2f} MHz, próg {settings['analysis_params']['threshold']}%"
+                    f"Parametry: {settings['analysis_params']['frequency']:.2f} MHz, próg {settings['analysis_params']['threshold']}"
                 )
                 
                 self.results_text.setPlainText(info_text)
