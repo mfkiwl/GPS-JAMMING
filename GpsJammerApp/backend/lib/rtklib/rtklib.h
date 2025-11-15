@@ -25,11 +25,15 @@ extern "C" {
 #define HION        350000.0            // ionosphere height (m)
 #define MAXFREQ     7                   // max NFREQ
 #define FREQ1       1.57542E9           // L1/E1  frequency (Hz)
+#define FREQ1_GLO   1.60200E9           // GLONASS G1 base frequency (Hz)
+#define DFRQ1_GLO   0.56250E6           // GLONASS G1 bias frequency (Hz/n)
 #define EFACT_GPS   1.0                 // error factor: GPS   
 
 #define SYS_NONE    0x00                // navigation system: none   
 #define SYS_GPS     0x01                // navigation system: GPS   
 #define SYS_SBS     0x02                // navigation system: SBAS   
+#define SYS_GLO     0x04                // navigation system: GLONASS   
+#define SYS_GAL     0x08                // navigation system: Galileo   
 
 #define TSYS_GPS    0                   // time system: GPS time   
 #define TSYS_UTC    1                   // time system: UTC   
@@ -46,15 +50,23 @@ extern "C" {
 #define MAXPRNGPS   32                  // max satellite PRN number of GPS   
 #define NSATGPS     (MAXPRNGPS-MINPRNGPS+1) // number of GPS satellites   
 #define NSYSGPS     1
+#define MINPRNGLO   1                   // min satellite PRN number of GLONASS
+#define MAXPRNGLO   24                  // max satellite PRN number of GLONASS
+#define NSATGLO     (MAXPRNGLO-MINPRNGLO+1) // number of GLONASS satellites
+#define NSYGLO      1
+#define MINPRNGAL   1                   // min satellite PRN number of Galileo   
+#define MAXPRNGAL   36                  // max satellite PRN number of Galileo   
+#define NSATGAL     (MAXPRNGAL-MINPRNGAL+1) // number of Galileo satellites   
+#define NSYSGAL     1
 
-#define NSYS        NSYSGPS // number of systems
+#define NSYS        (NSYSGPS+NSYGLO+NSYSGAL) // number of systems
 
 #define MINPRNSBS   120                 // min satellite PRN number of SBAS   
 #define MAXPRNSBS   142                 // max satellite PRN number of SBAS   
 #define NSATSBS     (MAXPRNSBS-MINPRNSBS+1) // number of SBAS satellites   
 
 //#define MAXSAT      (NSATGPS+NSATGLO+NSATGAL+NSATQZS+NSATCMP+NSATSBS+NSATLEO)
-#define MAXSAT      32  // DK set to GPS size
+#define MAXSAT      (NSATGPS+NSATGLO+NSATGAL+NSATSBS)
                                         // max satellite number (1 to MAXSAT)   
 #ifndef MAXOBS
 #define MAXOBS      64                  // max number of obs in an epoch   
@@ -190,6 +202,20 @@ typedef struct {        // GPS/QZS/GAL broadcast ephemeris type
                         // CMP    :tgd[0]=BGD1,tgd[1]=BGD2   
 } eph_t;
 
+typedef struct {        // GLONASS broadcast ephemeris type
+    int sat;            // satellite number
+    int iode;           // IODE (0-6 bit of tb field)
+    int frq;            // satellite frequency number
+    int svh,sva,age;    // satellite health, accuracy, age of operation
+    gtime_t toe;        // epoch of epherides (gpst)
+    gtime_t tof;        // message frame time (gpst)
+    double pos[3];      // satellite position (ecef) (m)
+    double vel[3];      // satellite velocity (ecef) (m/s)
+    double acc[3];      // satellite acceleration (ecef) (m/s^2)
+    double taun,gamn;   // SV clock bias (s)/relative freq bias
+    double dtaun;       // delay between L1 and L2 (s)
+} geph_t;
+
 typedef struct {        // SBAS message type   
     int week,tow;       // receiption time   
     int prn;            // SBAS satellite PRN number   
@@ -292,8 +318,10 @@ extern void satno2id(int sat, char *id);
 
 // time and string functions -------------------------------------------------
 extern gtime_t epoch2time(const double *ep);
+extern void time2epoch(gtime_t t, double *ep);
 extern gtime_t gpst2time(int week, double sec);
 extern gtime_t gst2time(int week, double sec);
+extern double  time2gpst (gtime_t t, int *week);
 extern gtime_t timeadd  (gtime_t t, double sec);
 extern double  timediff (gtime_t t1, gtime_t t2);
 extern gtime_t utc2gpst (gtime_t t);
