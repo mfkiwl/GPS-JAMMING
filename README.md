@@ -8,7 +8,6 @@ System do analizy sygnałów GPS, detekcji zakłóceń oraz lokalizacji źróde�
 - **Python**: 3.10+
 - **RAM**: minimum 8GB
 - **Kompilator C**: gcc, make
-- **Go**: 1.19+ (opcjonalne, dla backendu)
 
 ## Instalacja
 
@@ -38,9 +37,11 @@ pip install numpy pandas scipy matplotlib haversine scikit-learn
 
 ### 4. Kompilacja backendu C
 ```bash
-cd GpsJammerApp/backendhttp
-make
-cd ../..
+# Instalacja zależności dla Ubuntu:
+sudo apt install build-essential libfftw3-dev libusb-1.0-0-dev libfec-dev 
+
+cd GpsJammerApp/backend/bin
+make clean && make
 ```
 
 ### 5. (Opcjonalne) Instalacja gps-sdr-sim do symulacji
@@ -128,8 +129,7 @@ GPS-JAMMING/
 │   │   ├── worker.py
 │   │   ├── checkIfJamming.py
 │   │   └── config.py
-│   ├── backend/           # Backend C (gnssdec)
-│   ├── backendhttp/       # Backend HTTP C
+│   ├── backend/           # Backend HTTP C
 │   └── resources/         # Zasoby (HTML, CSS)
 ├── simulate/              # Narzędzia symulacyjne
 │   └── frontend/          # GUI symulacji
@@ -201,11 +201,11 @@ pip install PySide6==6.5.2 PySide6-QtWebEngine==6.5.2
 
 ### Backend się nie kompiluje
 ```bash
-cd GpsJammerApp/backendhttp
+cd GpsJammerApp/backend/bin
 make clean
 make
 # Jeśli brakuje bibliotek:
-sudo apt install build-essential libfftw3-dev
+sudo apt install build-essential libfftw3-dev libusb-1.0-0-dev libfec-dev 
 ```
 
 ### Błędy triangulacji
