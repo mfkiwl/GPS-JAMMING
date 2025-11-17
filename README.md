@@ -4,10 +4,11 @@ System do analizy sygnałów GPS, detekcji zakłóceń oraz lokalizacji źróde�
 
 ## Wymagania systemowe
 
-- **System operacyjny**: Linux (testowane na Ubuntu 22.04)
+- **System operacyjny**: Linux (testowane na Ubuntu 24.04.3 LTS)
 - **Python**: 3.10+
 - **RAM**: minimum 8GB
 - **Kompilator C**: gcc, make
+- **Połączenie internetowe** - wyświetlanie mapy
 
 ## Instalacja
 
