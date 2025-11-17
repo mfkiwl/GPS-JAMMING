@@ -8,7 +8,7 @@ System do analizy sygnałów GPS, detekcji zakłóceń oraz lokalizacji źróde�
 - **Python**: 3.10+
 - **RAM**: minimum 8GB
 - **Kompilator C**: gcc, make
-- **Połączenie internetowe** - wyświetlanie mapy
+- **Połączenie internetowe**: wyświetlanie mapy
 
 ## Instalacja
 
