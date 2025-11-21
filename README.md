@@ -18,14 +18,6 @@ git clone <repository-url>
 cd GPS-JAMMING
 ```
 
-### 2. Automatyczna instalacja (zalecane)
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-Lub ręczna instalacja:
-
 ### 2. Utworzenie środowiska wirtualnego
 ```bash
 python3 -m venv .venv
