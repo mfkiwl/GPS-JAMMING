@@ -1,4 +1,4 @@
 # tu wstaw współrzędne początkowe mapy
-LAT = 50.06143   # Kraków
-LNG = 19.93658
-ZOOM = 13
+LAT = 50.00898   # Kraków
+LNG = 19.98287
+ZOOM = 18

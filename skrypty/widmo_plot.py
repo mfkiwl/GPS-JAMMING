@@ -1,104 +1,96 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import argparse
-from pathlib import Path
 import numpy as np
-import matplotlib
 import matplotlib.pyplot as plt
+from scipy import signal
+import os
 
-def compute_psd_iq_uint8(path, fs, nfft=131072, overlap=0.5, max_segments=None):
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
+# --- KONFIGURACJA ---
+FILENAME = '/home/szymon/Downloads/capture_ruch10.bin'  # Zmień na nazwę pliku
+SAMPLE_RATE = 2.048e6           # 2.048 MSps
+CHUNK_SIZE = int(SAMPLE_RATE)   # Analizujemy 1 sekundę na raz (jako jeden "pasek" wykresu)
+FFT_SIZE = 1024                 # Rozdzielczość częstotliwościowa (szerokość wykresu)
 
-    mm = np.memmap(path, dtype=np.uint8, mode='r')
-    total_bytes = mm.size
-    if total_bytes < 2*nfft:
-        data = np.asarray(mm, dtype=np.float32) - 128.0
-        if data.size % 2 != 0:
-            data = data[:-1]
-        I = data[0::2]; Q = data[1::2]
-        x = (I + 1j*Q)
-        if x.size < nfft:
-            tmp = np.zeros(nfft, dtype=np.complex64)
-            tmp[:x.size] = x
-            x = tmp
-        win = np.hanning(nfft).astype(np.float32)
-        X = np.fft.fft(x[:nfft] * win, n=nfft)
-        Pxx = (np.abs(X)**2) / (win**2).sum()
-        return Pxx, 1
+def analyze_full_file(filename):
+    file_size = os.path.getsize(filename)
+    total_samples = file_size // 2 # 2 bajty na próbkę (I+Q)
+    duration_sec = total_samples / SAMPLE_RATE
+    
+    print(f"Analiza pliku: {filename}")
+    print(f"Rozmiar: {file_size/1024/1024:.2f} MB")
+    print(f"Czas trwania: {duration_sec:.2f} sekund")
+    print("Przetwarzanie... to może chwilę potrwać.")
 
-    nsamp = total_bytes // 2 
-    seg = nfft
-    step = max(1, int(seg * (1.0 - overlap)))
+    # Przygotowanie tablic na wyniki
+    spectrogram_data = []
+    histogram_samples = [] # Weźmiemy próbki losowo do histogramu
+    
+    with open(filename, 'rb') as f:
+        while True:
+            # Czytamy kawałek (CHUNK) - np. 1 sekundę
+            raw_chunk = np.fromfile(f, dtype=np.uint8, count=CHUNK_SIZE * 2)
+            
+            if len(raw_chunk) < FFT_SIZE * 2:
+                break # Koniec pliku
 
-    n_segments = (nsamp - seg) // step + 1
-    if max_segments is not None:
-        n_segments = min(n_segments, max_segments)
+            # Zbieranie próbek do histogramu (bierzemy co 100-tną próbkę, żeby nie zapchać pamięci, ale mieć reprezentację całości)
+            histogram_samples.extend(raw_chunk[::100])
 
-    win = np.hanning(seg).astype(np.float32)
-    win_power = (win**2).sum()
+            # Konwersja na zespolone
+            raw_chunk = raw_chunk.astype(np.float32)
+            i = (raw_chunk[0::2] - 127.5) / 127.5
+            q = (raw_chunk[1::2] - 127.5) / 127.5
+            complex_chunk = i + 1j * q
+            
+            # Usunięcie DC offset (dla danego kawałka)
+            complex_chunk = complex_chunk - np.mean(complex_chunk)
 
-    Pxx_acc = None
-    for k in range(n_segments):
-        i0 = k * step
-        b0 = 2 * i0  
-        b1 = 2 * (i0 + seg)
-        block_u8 = np.asarray(mm[b0:b1], dtype=np.float32) - 128.0
-        I = block_u8[0::2]; Q = block_u8[1::2]
-        x = (I + 1j*Q)
-        x = x - np.mean(x)
-        xw = x * win
-        X = np.fft.fft(xw, n=seg)
-        Pxx = (np.abs(X)**2) / win_power
-        if Pxx_acc is None:
-            Pxx_acc = Pxx
-        else:
-            Pxx_acc += Pxx
+            # Obliczenie PSD (widma) dla tego kawałka czasu
+            # Używamy Welcha, żeby wygładzić szum w obrębie tej 1 sekundy
+            f_axis, Pxx = signal.welch(complex_chunk, SAMPLE_RATE, nperseg=FFT_SIZE, return_onesided=False)
+            
+            # Shift i Logarytm
+            Pxx = np.fft.fftshift(Pxx)
+            Pxx_db = 10 * np.log10(Pxx + 1e-15)
+            
+            spectrogram_data.append(Pxx_db)
 
-    Pxx_mean = Pxx_acc / n_segments
-    return Pxx_mean, n_segments
+    # Konwersja listy na macierz 2D (Czas x Częstotliwość)
+    spectrogram_array = np.array(spectrogram_data)
+    
+    # --- RYSOWANIE ---
+    fig = plt.figure(figsize=(12, 10))
+    gs = fig.add_gridspec(3, 1, height_ratios=[3, 1, 1])
 
-def main():
-    ap = argparse.ArgumentParser(description="Widmo/PSD dla pliku rtl_sdr (I/Q uint8).")
-    ap.add_argument("input", help="Plik wejściowy z rtl_sdr (uint8, I/Q interleaved).")
-    ap.add_argument("--fs", type=float, default=2_048_000.0,
-                    help="Częstotliwość próbkowania w Hz (domyślnie 2.048e6).")
-    ap.add_argument("--fc", type=float, default=None,
-                    help="Częstotliwość strojeniowa w Hz (opcjonalnie, tylko do podpisu).")
-    ap.add_argument("--nfft", type=int, default=131072, help="Długość FFT/segmentu (potęga 2).")
-    ap.add_argument("--overlap", type=float, default=0.5, help="Nakładanie segmentów (0..0.9).")
-    ap.add_argument("--max-segments", type=int, default=None,
-                    help="Ogranicz liczbę segmentów (szybsze działanie przy bardzo dużych plikach).")
-    ap.add_argument("--png", type=str, default="widmo_gps.png", help="Plik wyjściowy PNG.")
-    ap.add_argument("--title", type=str, default=None, help="Tytuł wykresu (opcjonalnie).")
-    args = ap.parse_args()
+    # 1. WODOSPAD (Spectrogram) - Cały plik
+    ax1 = fig.add_subplot(gs[0])
+    # Oś X: Częstotliwość (MHz), Oś Y: Czas (s)
+    extent = [-SAMPLE_RATE/2/1e6, SAMPLE_RATE/2/1e6, duration_sec, 0]
+    im = ax1.imshow(spectrogram_array, aspect='auto', extent=extent, cmap='inferno', interpolation='nearest')
+    ax1.set_title(f'Pełny Spektrogram (Wodospad) - {duration_sec:.1f}s')
+    ax1.set_ylabel('Czas [s]')
+    ax1.set_xlabel('Częstotliwość [MHz]')
+    plt.colorbar(im, ax=ax1, label='Moc [dB]')
 
-    Pxx, nseg = compute_psd_iq_uint8(args.input, args.fs, args.nfft, args.overlap, args.max_segments)
-    Pxx = np.fft.fftshift(Pxx)
-    f = np.fft.fftshift(np.fft.fftfreq(args.nfft, d=1.0/args.fs))
+    # 2. ŚREDNIE WIDMO (Z całego pliku)
+    ax2 = fig.add_subplot(gs[1])
+    mean_spectrum = np.mean(spectrogram_array, axis=0) # Średnia po czasie
+    freq_axis = np.linspace(-SAMPLE_RATE/2/1e6, SAMPLE_RATE/2/1e6, FFT_SIZE)
+    ax2.plot(freq_axis, mean_spectrum, color='blue')
+    ax2.set_title('Średnie Widmo z całego nagrania')
+    ax2.set_ylabel('Moc [dB]')
+    ax2.grid(True)
+    ax2.set_xlim(freq_axis[0], freq_axis[-1])
 
-    Pxx_dB = 10.0 * np.log10(Pxx + 1e-20)
+    # 3. HISTOGRAM (Z próbek z całego pliku)
+    ax3 = fig.add_subplot(gs[2])
+    ax3.hist(histogram_samples, bins=256, range=(0, 256), color='green', alpha=0.7, density=True)
+    ax3.set_title('Histogram (Reprezentatywny dla całego pliku)')
+    ax3.set_xlabel('Wartość surowa (0-255)')
+    ax3.axvline(0, color='red', linestyle='--')
+    ax3.axvline(255, color='red', linestyle='--')
+    ax3.grid(True, alpha=0.3)
 
-    plt.figure(figsize=(11, 5))
-    plt.plot(f, Pxx_dB, linewidth=0.9)
-    plt.xlabel("Częstotliwość [Hz] (baseband)")
-    plt.ylabel("PSD [dB]")
-    tt = args.title or f"Widmo/PSD rtl_sdr — nfft={args.nfft}, segmentów={nseg}"
-    if args.fc:
-        tt += f" (fc={args.fc/1e6:.6f} MHz)"
-    plt.title(tt)
-    plt.grid(True)
     plt.tight_layout()
-    plt.savefig(args.png, dpi=150)
-    try:
-        plt.show()
-    except Exception:
-        pass
+    plt.show()
 
-    print(f"[OK] Zapisano: {Path(args.png).resolve()}")
-    print(f"Fs={args.fs:.3f} Hz, nfft={args.nfft}, segmenty={nseg}")
-
-if __name__ == "__main__":
-    main()
+# URUCHOMIENIE
+analyze_full_file(FILENAME)

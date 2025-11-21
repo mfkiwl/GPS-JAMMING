@@ -114,8 +114,8 @@ def trilaterate(p0, r0, p1, r1, p2, r2):
 
 def triangulate_jammer_location(file_paths, 
                               antenna_positions_meters=None,
-                              reference_lat=50.06143,
-                              reference_lon=19.93658,
+                              reference_lat=50.00898,
+                              reference_lon=19.98287,
                               tx_power=DEFAULT_CALIBRATED_TX_POWER,
                               path_loss_exp=DEFAULT_CALIBRATED_PATH_LOSS_EXPONENT,
                               frequency_mhz=DEFAULT_SIGNAL_FREQUENCY_MHZ,
@@ -280,8 +280,8 @@ if __name__ == "__main__":
     print("Test z 3 antenami:")
     result_3ant = triangulate_jammer_location(
         example_files,
-        reference_lat=50.06143,
-        reference_lon=19.93658,
+        reference_lat=50.00898,
+        reference_lon=19.98287,
         verbose=True
     )
     

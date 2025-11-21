@@ -714,7 +714,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(value)
 
         if state == "jamming":
-            self.progress_bar.setFormat("🚨 Znaleziono jamming, analizowanie...")
+            self.progress_bar.setFormat("🚨 Znaleziono zakłócenia, analizowanie...")
         elif state == "triangulating":
             self.progress_bar.setFormat("📐 Triangulacja - obliczanie lokalizacji jammera...")
         elif state == "completed":

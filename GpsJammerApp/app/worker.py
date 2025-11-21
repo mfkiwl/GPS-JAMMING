@@ -468,8 +468,8 @@ class GPSAnalysisThread(QThread):
                     #print(f"[TRIANGULATION THREAD] Próbka: {final_position['buffcnt']} (ostatnia przed jamming {self.jamming_start_sample})")
                     #print(f"[TRIANGULATION THREAD] Różnica: {self.jamming_start_sample - final_position['buffcnt']} próbek przed jammingiem")
                 else:
-                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.06143
-                    ref_lon = self.current_lon if self.current_lon != 0.0 else 19.93658
+                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.00898
+                    ref_lon = self.current_lon if self.current_lon != 0.0 else 19.98287
                     print(f"[TRIANGULATION THREAD] Punkt referencyjny (fallback): {ref_lat:.6f}, {ref_lon:.6f}")
                     print(f"[TRIANGULATION THREAD] UWAGA: Brak zapisanej pozycji przed jammingiem!")
                 
@@ -569,8 +569,8 @@ class GPSAnalysisThread(QThread):
                     print(f"[TRIANGULATION THREAD] Współrzędne: {ref_lat:.8f}, {ref_lon:.8f}")
                     #print(f"[TRIANGULATION THREAD] Próbka: {final_position['buffcnt']}")
                 else:
-                    ref_lat = 50.06143
-                    ref_lon = 19.93658
+                    ref_lat = 50.00898
+                    ref_lon = 19.98287
                     print(f"[TRIANGULATION THREAD] Punkt referencyjny (fallback): {ref_lat:.6f}, {ref_lon:.6f}")
                     print(f"[TRIANGULATION THREAD] UWAGA: Brak zapisanej pozycji!")
                 antenna_positions_meters = [

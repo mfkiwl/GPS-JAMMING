@@ -7,6 +7,10 @@ Uruchom: python3 test_http_server.py
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import datetime
+import os
+
+# Plik do zapisu danych
+LOG_FILE = "capture_10min.txt"
 
 class JSONHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -19,6 +23,13 @@ class JSONHandler(BaseHTTPRequestHandler):
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 print(f"\n[{timestamp}] Otrzymano dane JSON:")
                 print(json.dumps(data, indent=2, ensure_ascii=False))
+                
+                with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                    f.write(f"\n{'='*80}\n")
+                    f.write(f"[{timestamp}]\n")
+                    f.write(json.dumps(data, indent=2, ensure_ascii=False))
+                    f.write("\n")
+                print(f"Dopisano do pliku: {LOG_FILE}")
 
                 try:
                     self.send_response(200)
@@ -51,6 +62,7 @@ if __name__ == '__main__':
     server_address = ('127.0.0.1', 1234)
     httpd = HTTPServer(server_address, JSONHandler)
     print(f"Serwer HTTP nasłuchuje na http://127.0.0.1:1234")
+    print(f"Dane będą zapisywane do pliku: {LOG_FILE}")
     print("Czekam na dane z gnssdec...\n")
     try:
         httpd.serve_forever()
