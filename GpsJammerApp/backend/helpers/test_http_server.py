@@ -10,7 +10,7 @@ import datetime
 import os
 
 # Plik do zapisu danych
-LOG_FILE = "check.txt"
+LOG_FILE = "nowy.txt"
 
 class JSONHandler(BaseHTTPRequestHandler):
     def do_POST(self):

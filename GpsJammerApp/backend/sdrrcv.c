@@ -84,8 +84,11 @@ extern void file_getbuff(uint64_t buffloc, int n, int ftype, int dtype,
     uint64_t membuffloc =
         dtype * buffloc % (MEMBUFFLEN * dtype * FILE_BUFFSIZE);
     int nout;
+    int i;
+    int total_bytes;
 
     n = dtype * n;
+    total_bytes = n;
     nout = (int)((membuffloc + n) - (MEMBUFFLEN * dtype * FILE_BUFFSIZE));
 
     mlock(hbuffmtx);
@@ -97,4 +100,9 @@ extern void file_getbuff(uint64_t buffloc, int n, int ftype, int dtype,
         memcpy(expbuf, &sdrstat.buff[membuffloc], n);
     }
     unmlock(hbuffmtx);
+
+    for (i = 0; i < total_bytes; i++) {
+        expbuf[i] = (char)((unsigned char)expbuf[i] - 128);
+    }
 }
+

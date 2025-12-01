@@ -6,11 +6,17 @@ import json
 import threading
 import time
 import numpy as np
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import datetime
-from .checkIfJamming import analyze_file_for_jamming 
+
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'skrypty'))
 from triangulateRSSI import triangulate_jammer_location
+
+# [FIX] Klasa serwera z wymuszonym ponownym użyciem portu
+# Zapobiega błędowi "Address already in use" przy restarcie analizy
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
 
 class _DataReceiverHandler(BaseHTTPRequestHandler):
     thread_instance = None
@@ -67,18 +73,33 @@ class GPSAnalysisThread(QThread):
     new_position_data = Signal(float, float, float)
     jamming_analysis_complete = Signal(list) 
     triangulation_complete = Signal(dict)
+    jamming_detected_realtime = Signal(bool, dict)
 
-    def __init__(self, file_paths, power_threshold=120.0, antenna_positions=None, satellite_system='GPS', hold_position=False):
+    def __init__(self, file_paths, power_threshold=6.0, antenna_positions=None, satellite_system='GPS', hold_position=False):
         super().__init__()
         self.file_paths = file_paths
-        self.power_threshold = power_threshold
+        
+        self.POWER_CHUNK_SIZE = 32768 
+        
+        # Progi Naukowe
+        # Ignorujemy argument power_threshold na rzecz stałej 6.0dB (ITU-R)
+        self.THRESHOLD_POWER_RISE_DB = 6.0
+        print(f"[GPS THREAD] Próg detekcji mocy (ITU-R): {self.THRESHOLD_POWER_RISE_DB} dB")
+        
+        self.THRESHOLD_CN0_DROP_DB = 8.0 
+        self.THRESHOLD_RESIDUALS_MEDIAN_M = 40.0
+        self.THRESHOLD_RESIDUAL_SINGLE_SAT_M = 800.0 
+        self.MIN_BAD_SATS_FOR_ALARM = 2
+        self.THRESHOLD_HGT_MAX = 10000.0 
+        self.THRESHOLD_GDOP_MAX = 6.0 
+        self.THRESHOLD_NSAT_MIN = 4   
+        
         self.antenna_positions = antenna_positions if antenna_positions else {
             'antenna1': [0.0, 0.0],
             'antenna2': [0.5, 0.0],
             'antenna3': [0.0, 0.5]
         }
         
-        # Mapowanie flagi systemu !
         self.satellite_system = satellite_system
         if satellite_system == 'GPS':
             self.gnss_system_flag = '-g'
@@ -87,15 +108,11 @@ class GPSAnalysisThread(QThread):
         elif satellite_system == 'Galileo':
             self.gnss_system_flag = '-l'
         else:
-            self.gnss_system_flag = '-g'  # domyślnie GPS
+            self.gnss_system_flag = '-g'
         
         self.hold_position = hold_position
         
-        print(f"[WORKER INIT] Utworzono GPSAnalysisThread z pozycjami anten:")
-        print(f"[WORKER INIT]   Antena 1: {self.antenna_positions['antenna1']}")
-        print(f"[WORKER INIT]   Antena 2: {self.antenna_positions['antenna2']}")
-        print(f"[WORKER INIT]   Antena 3: {self.antenna_positions['antenna3']}")
-        print(f"[WORKER INIT]   System satelitarny: {self.satellite_system} (flaga: {self.gnss_system_flag})")
+        # Zmienne stanu
         self.current_buffcnt = 0
         self.current_lat = 0.0
         self.current_lon = 0.0
@@ -103,10 +120,43 @@ class GPSAnalysisThread(QThread):
         self.current_nsat = 0
         self.current_gdop = 0.0
         self.current_clk_bias = 0.0
+        self.current_signal_time = 0.0
+        
+        self.current_cn0_avg = 0.0 
+        self.current_residuals_median = 0.0 
+        self.current_residuals_bad_count = 0 
+        
+        # Zmienne Mocy
+        self.power_map = [] 
+        self.global_baseline_power = 0.0 
+        self.current_iq_power = 0.0 
+        self.power_map_ready = False
+        self.total_file_bytes = 0 
+        self.power_detection_enabled = True
+        self.jamming_start_byte_offset = None 
+        
+        # Historia
+        self.cn0_history = deque(maxlen=100) 
+        self.median_cn0 = 0.0
+        
+        # Logika Jammingu
         self.jamming_detected = False
-        self.jamming_events = []
-        self.jamming_start_sample = None  
-        self.jamming_end_sample = None 
+        self.jamming_events = [] 
+        
+        self.potential_jamming_start_signal_time = None 
+        self.potential_jamming_end_signal_time = None 
+        self.potential_start_buffcnt = 0 
+        self.active_event_start_buffcnt = 0 
+        self.active_event_start_time = 0.0
+        
+        self.required_jamming_duration_sec = 2.5 
+        self.required_clean_duration_sec = 2.0   
+        
+        self.last_safe_position_buffer = deque(maxlen=50) 
+        self.last_position_before_jamming = {
+            'lat': 0.0, 'lon': 0.0, 'hgt': 0.0, 'buffcnt': 0, 'valid': False
+        } 
+        
         self.http_server = None
         self.http_thread = None
         self.jamming_thread = None
@@ -114,476 +164,428 @@ class GPSAnalysisThread(QThread):
         self.total_samples = 0
         self.estimated_total_samples = 0
         self.triangulation_result = None
-        self.jamming_analysis_finished = False 
-        self.triangulation_started = False
         self.stop_requested = False 
-        self.last_position_before_jamming = {
-            'lat': 0.0,
-            'lon': 0.0,
-            'hgt': 0.0,
-            'buffcnt': 0,
-            'valid': False
-        } 
-        self.jamming_analysis_complete.connect(self.on_jamming_detected)
+        self.triangulation_started = False
+        
         self.triangulation_complete.connect(self.on_triangulation_complete)
         
+        # Ustawienie ścieżek
         try:
-            app_dir = os.path.dirname(os.path.abspath(__file__)) 
+            base_dir = os.path.dirname(os.path.abspath(__file__)) 
+            # Zakładamy strukturę: backend/analysis -> backend/bin/gnssdec
+            # Czyli wychodzimy z analysis (..) i wchodzimy do bin
+            self.gnssdec_path = os.path.abspath(os.path.join(base_dir, "..","backend", "bin", "gnssdec"))
         except NameError:
-            app_dir = os.getcwd() 
-        self.project_root_dir = os.path.dirname(app_dir)
-        
-        self.gnssdec_path = os.path.join(
-            self.project_root_dir, "backend", "bin", "gnssdec"
-        )
+            self.gnssdec_path = "gnssdec" # Fallback
+
         if self.file_paths:
-            self.calculate_file_samples()
-        
+            self.calculate_file_samples() 
+            
     def calculate_file_samples(self):
         try:
             if not self.file_paths or not os.path.exists(self.file_paths[0]):
                 return
-            
             file_path = self.file_paths[0]
             file_size = os.path.getsize(file_path)
+            self.total_file_bytes = file_size 
             bytes_per_sample = 2 
             self.total_samples = file_size // bytes_per_sample
-
-            if file_size % 4 == 0: 
-                samples_int16 = file_size // 4
-                if samples_int16 > 100000:
-                    self.total_samples = samples_int16
-                    bytes_per_sample = 4
-                    
             self.estimated_total_samples = self.total_samples
-            
-            print(f"[PROGRESS] Plik: {os.path.basename(file_path)}")
-            print(f"[PROGRESS] Rozmiar: {file_size} bajtów")
-            print(f"[PROGRESS] Bajty na próbkę: {bytes_per_sample}")
-            print(f"[PROGRESS] Całkowita liczba próbek: {self.total_samples}")
-            print(f"[PROGRESS] Szacowany czas analizy: {self.total_samples / 2048000:.1f}s przy 2.048 MHz")
-            
         except Exception as e:
             print(f"[PROGRESS] Błąd przy obliczaniu próbek: {e}")
             self.total_samples = 0
 
+    def precalculate_power_profile(self):
+        """Skanuje plik .bin (format uint8) i tworzy mapę mocy."""
+        if not self.file_paths or not os.path.exists(self.file_paths[0]):
+            return
+
+        file_path = self.file_paths[0]
+        print(f"[POWER SCAN] Skanowanie (uint8): {os.path.basename(file_path)}")
+        self.progress_update.emit(0, "scanning_power")
+        
+        try:
+            dt = np.uint8 
+            chunk_size_bytes = self.POWER_CHUNK_SIZE * 2 
+            temp_powers = []
+            
+            self.total_file_bytes = os.path.getsize(file_path)
+            
+            with open(file_path, 'rb') as f:
+                processed_bytes = 0
+                while not self.stop_requested:
+                    raw_data = f.read(chunk_size_bytes)
+                    if not raw_data: break
+                    
+                    samples = np.frombuffer(raw_data, dtype=dt)
+                    # KOREKTA RTL-SDR (0..255 -> -127.5..127.5)
+                    samples_f = samples.astype(np.float32) - 127.5
+                    
+                    i = samples_f[0::2]
+                    q = samples_f[1::2]
+                    min_len = min(len(i), len(q))
+                    
+                    power = i[:min_len]**2 + q[:min_len]**2
+                    avg_pow = np.mean(power) + 1e-10
+                    temp_powers.append(avg_pow)
+                    
+                    processed_bytes += len(raw_data)
+                    
+                    if self.total_file_bytes > 0:
+                        progress = int((processed_bytes / self.total_file_bytes) * 10)
+                        if progress % 2 == 0: 
+                             self.progress_update.emit(progress, "scanning_power")
+
+            self.power_map = np.array(temp_powers)
+            
+            if len(self.power_map) > 0:
+                self.global_baseline_power = np.percentile(self.power_map, 5) 
+                if self.global_baseline_power <= 0: self.global_baseline_power = 1.0
+                
+                threshold_ratio = 10**(self.THRESHOLD_POWER_RISE_DB / 10.0) 
+                power_threshold_linear = self.global_baseline_power * threshold_ratio
+                
+                jamming_indices = np.where(self.power_map > power_threshold_linear)[0]
+                
+                # Wykrywanie przedziałów
+                self.jamming_byte_ranges = []
+                if len(jamming_indices) > 0:
+                    jamming_mask = self.power_map > power_threshold_linear
+                    diffs = np.diff(jamming_mask.astype(int))
+                    starts = np.where(diffs == 1)[0] + 1
+                    ends = np.where(diffs == -1)[0] + 1
+                    
+                    if jamming_mask[0]: starts = np.insert(starts, 0, 0)
+                    if jamming_mask[-1]: ends = np.append(ends, len(self.power_map))
+                    
+                    for s, e in zip(starts, ends):
+                        start_byte = s * chunk_size_bytes
+                        end_byte = e * chunk_size_bytes
+                        self.jamming_byte_ranges.append((start_byte, end_byte))
+                        
+                    print(f"[POWER SCAN] Wykryto {len(self.jamming_byte_ranges)} okresów wysokiej mocy (F1).")
+                else:
+                    print(f"[POWER SCAN] Nie wykryto skoku mocy powyżej progu {self.THRESHOLD_POWER_RISE_DB} dB.")
+            
+            self.power_map_ready = True
+            self.progress_update.emit(10, "scanning_power_done")
+
+        except Exception as e:
+            print(f"[POWER SCAN] BŁĄD: {e}")
+            self.power_map_ready = False
+
     def process_incoming_data(self, data):
         try:
             position = data.get('position', {})
+            observations = data.get('observations', [])
+            elapsed_str = data.get('elapsed_time', 0.0)
+            try:
+                self.current_signal_time = float(elapsed_str)
+            except: pass
+
             if position:
-                self.current_buffcnt = position.get('buffcnt', 0)
+                self.current_buffcnt = position.get('buffcnt', 0) 
                 self.current_lat = float(position.get('lat', 0.0))
                 self.current_lon = float(position.get('lon', 0.0))
                 self.current_hgt = float(position.get('hgt', 0.0))
                 self.current_nsat = position.get('nsat', 0)
                 self.current_gdop = float(position.get('gdop', 0.0))
                 self.current_clk_bias = float(position.get('clk_bias', 0.0))
+                
+                # Aktualizacja mocy
+                if self.power_map_ready and self.total_file_bytes > 0:
+                    ratio = self.current_buffcnt / self.total_file_bytes
+                    ratio = max(0.0, min(1.0, ratio))
+                    idx = int(ratio * len(self.power_map))
+                    idx = min(idx, len(self.power_map)-1)
+                    self.current_iq_power = self.power_map[idx]
+
+                # Analiza obserwacji
+                snr_values = [obs.get('snr', 0.0) for obs in observations if 'snr' in obs]
+                if snr_values:
+                    self.current_cn0_avg = np.mean(snr_values)
+                    residuals = [obs.get('residual', 0.0) for obs in observations if 'residual' in obs]
+                    if residuals:
+                        self.current_residuals_median = np.median(residuals)
+                        bad_sats = sum(1 for r in residuals if r > self.THRESHOLD_RESIDUAL_SINGLE_SAT_M)
+                        self.current_residuals_bad_count = bad_sats
+                    else:
+                        self.current_residuals_median = 0.0
+                        self.current_residuals_bad_count = 0
+                else:
+                    self.current_cn0_avg = 0.0
+                    self.current_residuals_median = 0.0
+                    self.current_residuals_bad_count = 0
+
+                if not self.jamming_detected and self.current_cn0_avg > 0:
+                    self.cn0_history.append(self.current_cn0_avg)
+                if len(self.cn0_history) > 10: 
+                    self.median_cn0 = np.median(self.cn0_history)
+                else:
+                    self.median_cn0 = self.current_cn0_avg 
+
                 self.update_progress_bar()
                 
-                if self.current_lat != 0.0 and self.current_lon != 0.0:
-                    if self.jamming_analysis_finished and self.jamming_events and not self.triangulation_started:
-                        first_jamming_start = self.jamming_events[0][0]
-                        if self.current_buffcnt < first_jamming_start:
-                            if (not self.last_position_before_jamming['valid'] or 
-                                self.current_buffcnt > self.last_position_before_jamming['buffcnt']):
-                                self.last_position_before_jamming = {
-                                    'lat': self.current_lat,
-                                    'lon': self.current_lon,
-                                    'hgt': self.current_hgt,
-                                    'buffcnt': self.current_buffcnt,
-                                    'valid': True
-                                }
-                    elif not self.triangulation_started:
-                        candidate_position = {
-                            'lat': self.current_lat,
-                            'lon': self.current_lon,
-                            'hgt': self.current_hgt,
-                            'buffcnt': self.current_buffcnt,
-                            'valid': True
-                        }
-                        if self.jamming_events:
-                            first_jamming_start = self.jamming_events[0][0]
-                            if self.current_buffcnt < first_jamming_start:
-                                if (not self.last_position_before_jamming['valid'] or 
-                                    self.current_buffcnt > self.last_position_before_jamming['buffcnt']):
-                                    self.last_position_before_jamming = candidate_position
-                        else:
-                            self.last_position_before_jamming = candidate_position
-            
-            elapsed = data.get('elapsed_time', 'N/A')
-
-            text_output = f"[{elapsed}, {self.current_lat:.6f}, {self.current_lon:.6f}, {self.current_buffcnt}]"
-            self.new_analysis_text.emit(text_output)
-            
-            should_update_gui = self.should_update_gui_position()
-            if self.current_lat != 0.0 or self.current_lon != 0.0:
-                if should_update_gui:
-                    self.new_position_data.emit(self.current_lat, self.current_lon, self.current_hgt)
-        except Exception as e:
-            print(f"[WORKER] Błąd podczas przetwarzania danych JSON: {e}")
-            
-    def update_progress_bar(self):
-        if self.total_samples > 0 and self.current_buffcnt > 0:
-            current_total = max(self.total_samples, self.estimated_total_samples)
-            progress_percent = min(100, int((self.current_buffcnt / current_total) * 100))
-
-            if progress_percent % 10 == 0 and progress_percent != getattr(self, '_last_logged_percent', -1):
-                print(f"[PROGRESS] Postęp: {progress_percent}% ({self.current_buffcnt}/{int(current_total)} próbek)")
-                self._last_logged_percent = progress_percent
-
-            in_jamming_range = self.is_in_jamming_range()
-            
-            if in_jamming_range:
-                if self.triangulation_thread and self.triangulation_thread.is_alive():
-                    self.progress_update.emit(progress_percent, "triangulating")
-                else:
-                    self.progress_update.emit(progress_percent, "jamming")
-            else:
-                self.progress_update.emit(progress_percent, "normal")
-            
-            if self.current_buffcnt > self.estimated_total_samples:
-                old_estimate = self.estimated_total_samples
-                self.estimated_total_samples = self.current_buffcnt * 1.2 
-                #print(f"[PROGRESS] Aktualizacja szacowanej liczby próbek: {int(old_estimate)} → {int(self.estimated_total_samples)}")
+                is_safe = True
+                # Sprawdzenie mapy mocy
+                if self.jamming_byte_ranges:
+                    # Jeśli jesteśmy w którymkolwiek zakresie lub po nim
+                    if self.current_buffcnt >= self.jamming_byte_ranges[0][0]:
+                        is_safe = False
                 
-        elif self.current_buffcnt > 0:
-            print(f"[PROGRESS] Fallback mode: próbka {self.current_buffcnt} (brak informacji o całkowitej liczbie)")
-            
-            estimated_file_samples = max(1000000, self.current_buffcnt * 2) # strzelamy
-            progress_percent = min(95, int((self.current_buffcnt / estimated_file_samples) * 100))
-            self.progress_update.emit(progress_percent, "normal")
-        else:
-            self.progress_update.emit(0, "normal")
-            
-    def get_current_position_data(self):
-        return {
-            'buffcnt': self.current_buffcnt,
-            'lat': self.current_lat,
-            'lon': self.current_lon,
-            'hgt': self.current_hgt,
-            'nsat': self.current_nsat,
-            'gdop': self.current_gdop,
-            'clk_bias': self.current_clk_bias
-        }
-    
-    def get_current_sample_number(self):
-        return self.current_buffcnt
+                if self.jamming_detected:
+                    is_safe = False
 
-    def get_triangulation_result(self):
-        return self.triangulation_result
-    
-    def is_in_jamming_range(self):
-        if not self.jamming_analysis_finished or not self.jamming_events:
-            return False
-        for start, end in self.jamming_events:
-            if start <= self.current_buffcnt < end:
-                return True
-        
-        return False
-    
-    def should_update_gui_position(self):
-        if not self.jamming_analysis_finished:
-            return True
-        if not self.jamming_events:
-            return True
-        if self.is_in_jamming_range():
-            return False
-        return True
-
-    def on_jamming_detected(self, jamming_events_list):
-        self.jamming_events = jamming_events_list if jamming_events_list else []
-        
-        if self.jamming_events:
-            self.jamming_start_sample = self.jamming_events[0][0]
-            self.jamming_end_sample = self.jamming_events[0][1]
-            self.jamming_detected = True
-            
-            print(f"\n[JAMMING THREAD] Wykryto {len(self.jamming_events)} okres(ów) jammingu:")
-            for i, (start, end) in enumerate(self.jamming_events, 1):
-                duration = end - start
-                print(f"[JAMMING THREAD]   Zdarzenie {i}: próbki {start} - {end} (długość: {duration} próbek)")
-            
-            self.jamming_analysis_finished = True
-            
-            # Sprawdź pozycję referencyjną dla pierwszego zdarzenia
-            first_start = self.jamming_events[0][0]
-            if self.last_position_before_jamming['valid']:
-                if self.last_position_before_jamming['buffcnt'] < first_start:
-                    print(f"[JAMMING THREAD] ✅ ZATWIERDZONA pozycja przed jammingiem: "
-                          f"{self.last_position_before_jamming['lat']:.6f}, "
-                          f"{self.last_position_before_jamming['lon']:.6f} "
-                          f"(próbka {self.last_position_before_jamming['buffcnt']} < jamming {first_start})")
-                else:
-                    print(f"[JAMMING THREAD] ❌ ODRZUCONA pozycja - nie jest przed jammingiem!")
-                    print(f"[JAMMING THREAD]    Pozycja: próbka {self.last_position_before_jamming['buffcnt']} >= jamming {first_start}")
-                    # Wyczyść pozycję - nie jest przed jammingiem
-                    self.last_position_before_jamming = {
-                        'lat': 0.0, 'lon': 0.0, 'hgt': 0.0, 'buffcnt': 0, 'valid': False
-                    }
-                    print(f"[JAMMING THREAD]    Pozycja wyczyszczona - będzie aktualizowana przez nadchodzące dane gnssdec")
-            else:
-                print(f"[JAMMING THREAD] Brak zapisanej pozycji - będzie aktualizowana przez gnssdec")
-            if len(self.file_paths) >= 2:
-                print(f"[JAMMING THREAD] Triangulacja będzie uruchomiona PO zakończeniu gnssdec z ostatnią pozycją")
-            else:
-                print(f"[JAMMING THREAD] Pominięto triangulację - za mało plików ({len(self.file_paths)})")
-                
-        else:
-            self.jamming_detected = False
-            self.jamming_start_sample = None
-            self.jamming_end_sample = None
-            print(f"\n[JAMMING THREAD] Nie wykryto żadnego jammingu")
-            self.jamming_analysis_finished = True
-
-    def get_test_files_for_triangulation(self):
-        test_files = []
-        base_dir = os.path.dirname(self.file_paths[0]) if self.file_paths else "../data"
-        num_files = len(self.file_paths)
-        
-        for i in range(min(num_files, 3)): 
-            test_filename = f"test{i+1}.bin"
-            test_path = os.path.join(base_dir, test_filename)
-            
-            if os.path.exists(test_path):
-                test_files.append(test_path)
-                #print(f"[TEST FILES] Znaleziono plik triangulacji: {test_filename}")
-            else:
-                #print(f"[TEST FILES] OSTRZEŻENIE: Nie znaleziono {test_filename} w {base_dir}")
-                if i < len(self.file_paths):
-                    test_files.append(self.file_paths[i])
-                    #print(f"[TEST FILES] Używam oryginalnego pliku: {os.path.basename(self.file_paths[i])}")
-        
-        if not test_files:
-            #print("[TEST FILES] Brak plików testowych - używam oryginalnych plików")
-            return self.file_paths
-        
-        return test_files
-
-    def on_triangulation_complete(self, result):
-        self.triangulation_result = result
-        if result['success']:
-            geo = result['location_geographic']
-            ref_pos = result.get('reference_position')
-            
-            print(f"\n[TRIANGULATION] ✅ TRIANGULACJA ZAKOŃCZONA SUKCESEM:")
-            print(f"[TRIANGULATION]    🎯 Jammer: {geo['lat']:.8f}°N, {geo['lon']:.8f}°E")
-            print(f"[TRIANGULATION]    📏 Odległości: {result['distances']}")
-            print(f"[TRIANGULATION]    📐 Metoda: {result['num_antennas']}-antenna triangulation")
-            
-            if ref_pos:
-                print(f"[TRIANGULATION]    📍 Pozycja referencyjna: {ref_pos['lat']:.8f}, {ref_pos['lon']:.8f}")
-                print(f"[TRIANGULATION]    🔢 Próbka referencyjna: {ref_pos['buffcnt']}")
-        else:
-            print(f"\n[TRIANGULATION] ❌ BŁĄD TRIANGULACJI: {result['message']}")
-
-    def analyze_jamming_in_background(self, file_path):
-        def jamming_worker():
-            try:
-                print(f"[JAMMING THREAD] Rozpoczynanie analizy jammingu w pliku: {file_path}")
-                jamming_events = analyze_file_for_jamming(file_path, self.power_threshold)
-                
-                if jamming_events:
-                    print(f"[JAMMING THREAD] Analiza zakończona: wykryto {len(jamming_events)} okres(ów)")
-                    for i, (start, end) in enumerate(jamming_events, 1):
-                        print(f"[JAMMING THREAD]   Okres {i}: {start} - {end}")
-                else:
-                    print(f"[JAMMING THREAD] Analiza zakończona: brak jammingu")
-                
-                self.jamming_analysis_complete.emit(jamming_events)
-            except Exception as e:
-                print(f"[JAMMING THREAD] Błąd podczas analizy jammingu: {e}")
-                self.jamming_analysis_complete.emit([])
-        
-        self.jamming_thread = threading.Thread(target=jamming_worker)
-        self.jamming_thread.daemon = True
-        self.jamming_thread.start()
-
-    def analyze_triangulation_when_ready(self):
-        def triangulation_worker():
-            try:
-                if len(self.file_paths) < 2:
-                    self.triangulation_complete.emit({
-                        'success': False,
-                        'message': f'Triangulacja wymaga minimum 2 plików, masz {len(self.file_paths)}',
-                        'distances': None,
-                        'location_geographic': None,
-                        'num_antennas': len(self.file_paths)
-                    })
-                    return
-
-                print(f"[TRIANGULATION THREAD] Czekam na wykrycie jammingu i na to, by gnssdec przetworzył próbki do miejsca jammingu...")
-                import time
-                wait_time = 0.0
-
-                while not (self.jamming_detected and self.jamming_events):
-                    if self.stop_requested:
-                        print("[TRIANGULATION THREAD] Zatrzymano przez użytkownika")
-                        return
-                    time.sleep(0.5)
-                    wait_time += 0.5
-                    if int(wait_time) % 10 == 0:
-                        print(f"[TRIANGULATION THREAD] Czekam na wykrycie jammingu... ({wait_time:.0f}s)")
-
-                start_sample = self.jamming_events[0][0]
-                num_events = len(self.jamming_events)
-                print(f"[TRIANGULATION THREAD] Wykryto {num_events} okres(ów) jammingu")
-                print(f"[TRIANGULATION THREAD] Triangulacja dla pierwszego okresu: start_sample={start_sample}")
-                print(f"[TRIANGULATION THREAD] Czekam na aktualizacje pozycji z gnssdec...")
-
-                while self.current_buffcnt < start_sample:
-                    if self.stop_requested:
-                        print("[TRIANGULATION THREAD] Zatrzymano przez użytkownika")
-                        return
-                    time.sleep(0.5)
-                    wait_time += 0.5
-                    # co 10s loguj status
-                    if int(wait_time) % 10 == 0:
-                        print(f"[TRIANGULATION THREAD] Czekam aż gnssdec osiągnie próbkę {start_sample}... (current_buffcnt={self.current_buffcnt}, waited={wait_time:.0f}s)")
-                    if wait_time > 120:
-                        print(f"[TRIANGULATION THREAD] Oczekiwanie przekroczyło 120s — używam najlepszej dostępnej pozycji przed jammigem.")
-                        break
-
-                if self.last_position_before_jamming['valid']:
-                    print(f"[TRIANGULATION THREAD] Jamming wykryty i posiadam pozycję przed jammingiem: próbka {self.last_position_before_jamming['buffcnt']} < jamming start: {start_sample}")
-                else:
-                    print(f"[TRIANGULATION THREAD] Brak zapisanej pozycji przed jammingiem — użyję fallbacku po current_lat/current_lon lub pozycji domyślnej")
-                
-                print(f"[TRIANGULATION THREAD] Gotowe do triangulacji po {wait_time}s oczekiwania")
-
-                self.triangulation_started = True
-                final_position = self.last_position_before_jamming.copy()
-                print(f"[TRIANGULATION THREAD] ZABLOKOWANIE pozycji referencyjnej: {final_position['lat']:.8f}, {final_position['lon']:.8f} (próbka {final_position['buffcnt']})")
-
-                print(f"[TRIANGULATION THREAD] Rozpoczynanie triangulacji z {len(self.file_paths)} plikami...")
-                
-                test_files = self.get_test_files_for_triangulation()
-                print(f"[TRIANGULATION THREAD] Używam plików triangulacji: {[os.path.basename(f) for f in test_files]}")
-                
-                if final_position['valid']:
-                    ref_lat = final_position['lat']
-                    ref_lon = final_position['lon']
-                    # do debugowania
-                    #print(f"[TRIANGULATION THREAD] FINALNA POZYCJA REFERENCYJNA:")
-                    #print(f"[TRIANGULATION THREAD] Współrzędne: {ref_lat:.8f}, {ref_lon:.8f}")
-                    #print(f"[TRIANGULATION THREAD] Próbka: {final_position['buffcnt']} (ostatnia przed jamming {self.jamming_start_sample})")
-                    #print(f"[TRIANGULATION THREAD] Różnica: {self.jamming_start_sample - final_position['buffcnt']} próbek przed jammingiem")
-                else:
-                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.00898
-                    ref_lon = self.current_lon if self.current_lon != 0.0 else 19.98287
-                    print(f"[TRIANGULATION THREAD] Punkt referencyjny (fallback): {ref_lat:.6f}, {ref_lon:.6f}")
-                    print(f"[TRIANGULATION THREAD] UWAGA: Brak zapisanej pozycji przed jammingiem!")
-                
-                # Przygotuj pozycje anten w formacie dla triangulate_jammer_location
-                # WAŻNE: Konwertuj listy na numpy arrays - algorytm wymaga arrays!
-                antenna_positions_meters = [
-                    np.array(self.antenna_positions['antenna1']),  # [0.0, 0.0] - zawsze punkt odniesienia
-                    np.array(self.antenna_positions['antenna2']),  # np. [0.5, 0.0]
-                    np.array(self.antenna_positions['antenna3'])   # np. [0.0, 0.5]
-                ]
-                
-                print(f"[TRIANGULATION THREAD] Pozycje anten przekazane do algorytmu:")
-                print(f"[TRIANGULATION THREAD]   Antena 1: x={antenna_positions_meters[0][0]:.3f}m, y={antenna_positions_meters[0][1]:.3f}m")
-                print(f"[TRIANGULATION THREAD]   Antena 2: x={antenna_positions_meters[1][0]:.3f}m, y={antenna_positions_meters[1][1]:.3f}m")
-                if len(test_files) >= 3:
-                    print(f"[TRIANGULATION THREAD]   Antena 3: x={antenna_positions_meters[2][0]:.3f}m, y={antenna_positions_meters[2][1]:.3f}m")
-                
-                result = triangulate_jammer_location(
-                    file_paths=test_files,
-                    antenna_positions_meters=antenna_positions_meters,
-                    reference_lat=ref_lat,
-                    reference_lon=ref_lon,
-                    tx_power=40.0,
-                    path_loss_exp=3.0,
-                    frequency_mhz=1575.42,     
-                    threshold=self.power_threshold / 1000.0, 
-                    verbose=False 
-                )
-                
-                print(f"[TRIANGULATION THREAD] Triangulacja zakończona: sukces={result['success']}")
-                
-                if result['success'] and final_position['valid']:
-                    result['reference_position'] = {
-                        'lat': final_position['lat'],
-                        'lon': final_position['lon'],
-                        'buffcnt': final_position['buffcnt']
-                    }
-                
-                self.triangulation_complete.emit(result)
-                
-            except Exception as e:
-                print(f"[TRIANGULATION THREAD] Błąd podczas triangulacji: {e}")
-                self.triangulation_complete.emit({
-                    'success': False,
-                    'message': f'Błąd triangulacji: {str(e)}',
-                    'distances': None,
-                    'location_geographic': None,
-                    'num_antennas': len(self.file_paths) if hasattr(self, 'file_paths') else 0
-                })
-        
-        self.triangulation_thread = threading.Thread(target=triangulation_worker)
-        self.triangulation_thread.daemon = True
-        self.triangulation_thread.start()
-
-    def analyze_triangulation_after_gnssdec(self):
-        def triangulation_worker():
-            try:
-                if self.stop_requested:
-                    print("[TRIANGULATION THREAD] Zatrzymano przed rozpoczęciem")
-                    return
-                
-                if len(self.file_paths) < 2:
-                    self.triangulation_complete.emit({
-                        'success': False,
-                        'message': f'Triangulacja wymaga minimum 2 plików, masz {len(self.file_paths)}',
-                        'distances': None,
-                        'location_geographic': None,
-                        'num_antennas': len(self.file_paths)
-                    })
-                    return
-
-                print(f"[TRIANGULATION THREAD] Rozpoczynanie triangulacji po zakończeniu gnssdec z {len(self.file_paths)} plikami...")
-                
-                test_files = self.get_test_files_for_triangulation()
-                print(f"[TRIANGULATION THREAD] Używam plików triangulacji: {[os.path.basename(f) for f in test_files]}")
-                final_position = None
-                
-                if self.jamming_detected and self.last_position_before_jamming['valid']:
-                    final_position = self.last_position_before_jamming.copy()
-                    ref_lat = final_position['lat']
-                    ref_lon = final_position['lon']
-                    #print(f"[TRIANGULATION THREAD]   FINALNA POZYCJA REFERENCYJNA (przed jammingiem):")
-                    #print(f"[TRIANGULATION THREAD]    Współrzędne: {ref_lat:.8f}, {ref_lon:.8f}")
-                    #print(f"[TRIANGULATION THREAD]    Próbka: {final_position['buffcnt']} (ostatnia przed jamming {self.jamming_start_sample})")
-                    #print(f"[TRIANGULATION THREAD]    Różnica: {self.jamming_start_sample - final_position['buffcnt']} próbek przed jammingiem")
-                elif self.current_lat != 0.0 and self.current_lon != 0.0:
-                    final_position = {
+                if is_safe and self.current_lat != 0.0 and self.current_nsat >= 4:
+                     self.last_position_before_jamming = {
                         'lat': self.current_lat,
                         'lon': self.current_lon,
                         'hgt': self.current_hgt,
                         'buffcnt': self.current_buffcnt,
                         'valid': True
                     }
+
+                self.check_jamming_conditions()
+
+            pwr_db = 0.0
+            if self.global_baseline_power > 0 and self.current_iq_power > 0:
+                pwr_db = 10 * np.log10(self.current_iq_power / self.global_baseline_power)
+            
+            txt = f"[{self.current_signal_time:.2f}s, Lat:{self.current_lat:.6f}, Lon:{self.current_lon}, Pwr:{pwr_db:.1f}dB]"
+            self.new_analysis_text.emit(txt)
+            
+            if not self.jamming_detected and (self.current_lat != 0.0 or self.current_lon != 0.0):
+                self.new_position_data.emit(self.current_lat, self.current_lon, self.current_hgt)
+                    
+        except Exception as e:
+            print(f"[WORKER] Błąd: {e}")
+
+    def check_jamming_conditions(self):
+        # F1: MOC
+        flag_f1 = False
+        if self.jamming_byte_ranges:
+            for start_byte, end_byte in self.jamming_byte_ranges:
+                if start_byte <= self.current_buffcnt <= end_byte:
+                    flag_f1 = True
+                    break
+        
+        # F2: JAKOŚĆ
+        flag_f2 = False
+        if len(self.cn0_history) > 40: 
+            if self.current_cn0_avg < (self.median_cn0 - self.THRESHOLD_CN0_DROP_DB):
+                flag_f2 = True
+
+        # F3: INTEGRITY
+        flag_f3 = False
+        integrity_fail = (self.current_residuals_median > self.THRESHOLD_RESIDUALS_MEDIAN_M) or \
+                         (self.current_residuals_bad_count >= self.MIN_BAD_SATS_FOR_ALARM)
+        
+        # F4: WYSOKOŚĆ
+        flag_hgt = False
+        if self.current_nsat > 0 and abs(self.current_hgt) > self.THRESHOLD_HGT_MAX:
+            flag_hgt = True
+
+        nav_issue = (flag_f3 or flag_hgt) and (self.current_nsat > 0)
+        is_jamming_now = flag_f1 or flag_f2 or nav_issue
+        
+        if not self.jamming_detected:
+            if is_jamming_now:
+                if flag_f1:
+                     self.confirm_jamming_start(reason="Moc (Mapowana)")
+                else:
+                    if self.potential_jamming_start_signal_time is None:
+                        self.potential_jamming_start_signal_time = self.current_signal_time
+                        self.potential_start_buffcnt = self.current_buffcnt
+                    elif (self.current_signal_time - self.potential_jamming_start_signal_time) >= self.required_jamming_duration_sec:
+                        self.confirm_jamming_start(reason="Jakość/Integrity")
+            else:
+                self.potential_jamming_start_signal_time = None
+        else:
+            if not is_jamming_now:
+                if self.potential_jamming_end_signal_time is None:
+                    self.potential_jamming_end_signal_time = self.current_signal_time
+                else:
+                    clean_duration = self.current_signal_time - self.potential_jamming_end_signal_time
+                    if clean_duration >= self.required_clean_duration_sec:
+                        self.confirm_jamming_end()
+                        self.potential_jamming_end_signal_time = None
+            else:
+                self.potential_jamming_end_signal_time = None
+
+    def confirm_jamming_start(self, reason="N/A"):
+        self.jamming_detected = True
+        
+        start_byte = self.potential_start_buffcnt
+        if reason == "Moc (Mapowana)" and self.jamming_byte_ranges:
+             for s, e in self.jamming_byte_ranges:
+                 if s <= self.current_buffcnt <= e:
+                     start_byte = s
+                     break
+        else:
+             start_byte = self.potential_start_buffcnt if self.potential_start_buffcnt > 0 else self.current_buffcnt
+
+        self.active_event_start_buffcnt = start_byte
+        self.active_event_start_time = self.current_signal_time
+        
+        if reason == "Jakość/Integrity" and self.potential_jamming_start_signal_time:
+             self.active_event_start_time = self.potential_jamming_start_signal_time
+
+        print(f"[DETEKTOR] 🚨 ATAK POTWIERDZONY! Powód: {reason}")
+        print(f"[DETEKTOR]    Start: {self.active_event_start_time:.2f}s")
+        
+        if self.last_position_before_jamming['valid']:
+            self.jamming_detected_realtime.emit(True, self.last_position_before_jamming)
+        else:
+            print("[DETEKTOR] ⚠️ Brak bezpiecznej pozycji przed atakiem!")
+
+    def confirm_jamming_end(self):
+        self.jamming_detected = False
+        end_time = self.current_signal_time
+        print(f"[DETEKTOR] ✅ Koniec ataku. (Koniec: {end_time:.2f}s)")
+        
+        start_sample = self.active_event_start_buffcnt
+        end_sample = self.current_buffcnt
+        
+        event_data = {
+            'start_sample': start_sample,
+            'end_sample': end_sample,
+            'start_time': self.active_event_start_time,
+            'end_time': end_time,
+            'duration': end_time - self.active_event_start_time
+        }
+        
+        self.jamming_events.append(event_data)
+        self.jamming_detected_realtime.emit(False, {})
+
+    def get_best_safe_position(self):
+        if not self.last_safe_position_buffer:
+            return self.last_position_before_jamming 
+        return self.last_safe_position_buffer[0]
+
+    def update_progress_bar(self):
+        if self.total_samples > 0 and self.current_buffcnt > 0:
+            current_total = max(self.total_samples, self.estimated_total_samples)
+            progress_percent = min(100, int((self.current_buffcnt / current_total) * 100))
+            if self.jamming_detected:
+                status = "triangulating" if (self.triangulation_thread and self.triangulation_thread.is_alive()) else "jamming"
+                self.progress_update.emit(progress_percent, status)
+            else:
+                self.progress_update.emit(progress_percent, "normal")
+        else:
+            self.progress_update.emit(0, "normal")
+
+    def run(self):
+        self.stop_requested = False
+        _DataReceiverHandler.thread_instance = self
+        
+        print("[WORKER] Uruchamianie wątku analizy...")
+
+        # 1. SERVER
+        try:
+            server_address = ('127.0.0.1', 1234)
+            # [FIX] Używamy ReusableHTTPServer
+            self.http_server = ReusableHTTPServer(server_address, _DataReceiverHandler)
+            self.http_thread = threading.Thread(target=self.http_server.serve_forever)
+            self.http_thread.daemon = True 
+            self.http_thread.start()
+            print("[WORKER] Serwer HTTP uruchomiony (port 1234).") 
+        except Exception as e:
+            print(f"[WORKER] Błąd serwera: {e}")
+            return
+        
+        file1 = self.file_paths[0] if self.file_paths else None
+        if not file1: return
+
+        # 2. PRE-SCAN
+        self.precalculate_power_profile()
+        
+        if self.stop_requested:
+            self.shutdown_server()
+            return
+
+        # 3. GNSSDEC
+        try:
+            print(f"[WORKER] Uruchamianie analizy {self.gnssdec_path}...")
+            gnssdec_command = [self.gnssdec_path, self.gnss_system_flag]
+            if self.hold_position:
+                gnssdec_command.append('-h')
+            gnssdec_command.append(file1)
+            
+            self.current_signal_time = 0.0
+            self.cn0_history.clear()
+            
+            subprocess.run(gnssdec_command, check=True, capture_output=True, text=True)
+            print(f"[WORKER] Analiza gnssdec zakończona.")
+            
+        except Exception as e:
+            print(f"[WORKER] Błąd procesu gnssdec: {e}")
+            
+        finally:
+            self.progress_update.emit(100, "completed")
+            self.shutdown_server()
+            
+            # Jeśli plik się skończył, a jamming trwa, zamykamy zdarzenie
+            if self.jamming_detected:
+                print("[WORKER] Plik zakończony w trakcie aktywnego jammingu. Zamykanie zdarzenia.")
+                end_time = self.current_signal_time
+                start_sample = self.active_event_start_buffcnt
+                end_sample = self.current_buffcnt
+                
+                event_data = {
+                    'start_sample': start_sample,
+                    'end_sample': end_sample,
+                    'start_time': self.active_event_start_time,
+                    'end_time': end_time,
+                    'duration': end_time - self.active_event_start_time
+                }
+                self.jamming_events.append(event_data)
+                
+                # [FIX] Uruchom triangulację, jeśli jest jamming
+                print("[WORKER] Uruchamiam triangulację na koniec pliku...")
+                self.analyze_triangulation_after_gnssdec()
+                if self.triangulation_thread:
+                    self.triangulation_thread.join()
+            
+            result_info = []
+            if self.jamming_events:
+                 for i, ev in enumerate(self.jamming_events):
+                    result_info.append({
+                        'type': 'jamming',
+                        'event_number': i + 1,
+                        'start_sample': ev['start_sample'],
+                        'end_sample': ev['end_sample'],
+                        'start_time': ev['start_time'],
+                        'end_time': ev['end_time'],
+                        'duration': ev['duration'],
+                        'triangulation': self.triangulation_result
+                    })
+            else:
+                 result_info.append({'type': 'no_jamming'})
+                 
+            self.analysis_complete.emit(result_info)
+
+    def analyze_triangulation_after_gnssdec(self):
+        def triangulation_worker():
+            try:
+                if len(self.file_paths) < 2: 
+                    print("[TRIANGULACJA] Za mało plików do triangulacji.")
+                    return
+
+                print(f"[TRIANGULACJA] Start obliczeń...")
+                final_position = self.last_position_before_jamming
+                if final_position['valid']:
                     ref_lat = final_position['lat']
                     ref_lon = final_position['lon']
-                    #print(f"[TRIANGULATION THREAD] FINALNA POZYCJA REFERENCYJNA:")
-                    print(f"[TRIANGULATION THREAD] Współrzędne: {ref_lat:.8f}, {ref_lon:.8f}")
-                    #print(f"[TRIANGULATION THREAD] Próbka: {final_position['buffcnt']}")
                 else:
-                    ref_lat = 50.00898
-                    ref_lon = 19.98287
-                    print(f"[TRIANGULATION THREAD] Punkt referencyjny (fallback): {ref_lat:.6f}, {ref_lon:.6f}")
-                    print(f"[TRIANGULATION THREAD] UWAGA: Brak zapisanej pozycji!")
-                antenna_positions_meters = [
-                    np.array(self.antenna_positions['antenna1']),  # [0.0, 0.0] - zawsze punkt odniesienia
-                    np.array(self.antenna_positions['antenna2']),  # np. [0.5, 0.0]
-                    np.array(self.antenna_positions['antenna3'])   # np. [0.0, 0.5]
-                ]
+                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.0
+                    ref_lon = self.current_lon if self.current_lon != 0.0 else 20.0
                 
-                print(f"[TRIANGULATION THREAD] Pozycje anten przekazane do algorytmu:")
-                print(f"[TRIANGULATION THREAD]   Antena 1: x={antenna_positions_meters[0][0]:.3f}m, y={antenna_positions_meters[0][1]:.3f}m")
-                print(f"[TRIANGULATION THREAD]   Antena 2: x={antenna_positions_meters[1][0]:.3f}m, y={antenna_positions_meters[1][1]:.3f}m")
-                if len(test_files) >= 3:
-                    print(f"[TRIANGULATION THREAD]   Antena 3: x={antenna_positions_meters[2][0]:.3f}m, y={antenna_positions_meters[2][1]:.3f}m")
+                test_files = self.get_test_files_for_triangulation()
+                antenna_positions_meters = [
+                    np.array(self.antenna_positions['antenna1']),
+                    np.array(self.antenna_positions['antenna2']),
+                    np.array(self.antenna_positions['antenna3'])
+                ]
                 
                 result = triangulate_jammer_location(
                     file_paths=test_files,
@@ -593,182 +595,60 @@ class GPSAnalysisThread(QThread):
                     tx_power=40.0,
                     path_loss_exp=3.0,
                     frequency_mhz=1575.42,
-                    threshold=self.power_threshold / 1000.0,
+                    threshold=0.0, 
                     verbose=False
                 )
                 
-                print(f"[TRIANGULATION THREAD] Triangulacja zakończona: sukces={result['success']}")
-
-                if result['success'] and final_position and final_position['valid']:
-                    result['reference_position'] = {
-                        'lat': final_position['lat'],
-                        'lon': final_position['lon'],
-                        'buffcnt': final_position['buffcnt']
-                    }
+                if result['success'] and final_position['valid']:
+                    result['reference_position'] = final_position
                 
+                self.triangulation_result = result
                 self.triangulation_complete.emit(result)
-                
             except Exception as e:
-                print(f"[TRIANGULATION THREAD] Błąd podczas triangulacji: {e}")
-                self.triangulation_complete.emit({
-                    'success': False,
-                    'message': f'Błąd triangulacji: {str(e)}',
-                    'distances': None,
-                    'location_geographic': None,
-                    'num_antennas': len(self.file_paths) if hasattr(self, 'file_paths') else 0
-                })
+                print(f"[TRIANGULACJA] Błąd: {e}")
         
         self.triangulation_thread = threading.Thread(target=triangulation_worker)
-        self.triangulation_thread.daemon = True
         self.triangulation_thread.start()
 
-    def run(self):
-        self.stop_requested = False
-        
-        _DataReceiverHandler.thread_instance = self
-
-        try:
-            server_address = ('127.0.0.1', 1234)
-            self.http_server = HTTPServer(server_address, _DataReceiverHandler)
-            self.http_thread = threading.Thread(target=self.http_server.serve_forever)
-            self.http_thread.daemon = True 
-            self.http_thread.start()
-            print("[WORKER] Serwer HTTP uruchomiony na porcie 1234.") 
-            
-        except Exception as e:
-            print(f"[WORKER] BŁĄD: Nie można uruchomić serwera HTTP na porcie 1234: {e}")
-            self.analysis_complete.emit([])
-            return
-        
-        file1 = self.file_paths[0] if self.file_paths else None
-        
-        if not file1 or not os.path.exists(file1):
-            print(f"BŁĄD: Plik {file1} nie istnieje. Przerwanie.")
-            self.shutdown_server()
-            self.analysis_complete.emit([])
-            return
-            
-        if not os.path.exists(self.gnssdec_path):
-            print(f"BŁĄD: Nie znaleziono programu {self.gnssdec_path}. Przerwanie.")
-            self.shutdown_server()
-            self.analysis_complete.emit([])
-            return
-        self.analyze_jamming_in_background(file1)
-        if len(self.file_paths) >= 2:
-            self.analyze_triangulation_when_ready()
-        
-        try:
-            print(f"[WORKER] Uruchamianie analizy {self.gnssdec_path}...")
-            print(f"[WORKER] System satelitarny: {self.satellite_system} (flaga: {self.gnss_system_flag})")
-            print(f"[WORKER] Utrzymuj pozycję: {self.hold_position}")
-            
-            gnssdec_command = [self.gnssdec_path, self.gnss_system_flag]
-            if self.hold_position:
-                gnssdec_command.append('-h')
-            gnssdec_command.append(file1)
-            
-            result = subprocess.run(gnssdec_command, check=True, capture_output=True, text=True)
-            print(f"[WORKER] Analiza {self.gnssdec_path} zakończona.")
-            
-        except subprocess.CalledProcessError as e:
-            print(f"BŁĄD: Proces {self.gnssdec_path} zakończył się błędem!")
-        except Exception as e:
-            print(f"Nieoczekiwany błąd podczas uruchamiania gnssdec: {e}")
-            
-        finally:
-            self.progress_update.emit(100, "completed")
-            
-            self.shutdown_server()
-            print("[WORKER] Analiza gnssdec zakończona.")
-            triangulation_completed = False
-            
-            if self.triangulation_thread and self.triangulation_thread.is_alive():
-                print("[WORKER] Czekanie na zakończenie triangulacji (uruchomionej równolegle)...")
-                self.triangulation_thread.join(timeout=20) 
-                if self.triangulation_thread.is_alive():
-                    print("[WORKER] OSTRZEŻENIE: Triangulacja nadal trwa w tle!")
-                else:
-                    print("[WORKER] Triangulacja równoległa zakończona.")
-                    triangulation_completed = True
-            elif len(self.file_paths) >= 2 and not self.triangulation_started:
-                print("[WORKER] Uruchamiam triangulację")
-                self.analyze_triangulation_after_gnssdec()
-                if self.triangulation_thread:
-                    print("[WORKER] Czekam na zakończenie triangulacji...")
-                    self.triangulation_thread.join(timeout=25)  
-                    if self.triangulation_thread.is_alive():
-                        print("[WORKER] OSTRZEŻENIE: Triangulacja nadal trwa!")
-                    else:
-                        print("[WORKER] Triangulacja zakończona.")
-                        triangulation_completed = True
-
-            print("[WORKER] Wątek zakończył pracę. Odblokowanie UI.")
-
-            if self.jamming_detected and self.jamming_events:
-                result_info = []
-                for i, (start, end) in enumerate(self.jamming_events):
-                    result_info.append({
-                        'type': 'jamming',
-                        'event_number': i + 1,
-                        'start_sample': start,
-                        'end_sample': end,
-                        'duration': end - start,
-                        'triangulation': self.triangulation_result if i == 0 else None  # Tylko pierwszy ma triangulację
-                    })
-                self.analysis_complete.emit(result_info)
+    def get_test_files_for_triangulation(self):
+        test_files = []
+        base_dir = os.path.dirname(self.file_paths[0]) if self.file_paths else "../data"
+        num_files = len(self.file_paths)
+        for i in range(min(num_files, 3)): 
+            test_filename = f"test{i+1}.bin"
+            test_path = os.path.join(base_dir, test_filename)
+            if os.path.exists(test_path):
+                test_files.append(test_path)
             else:
-                result_info = [{
-                    'type': 'no_jamming',
-                    'triangulation': self.triangulation_result
-                }]
-                self.analysis_complete.emit(result_info)
+                if i < len(self.file_paths):
+                    test_files.append(self.file_paths[i])
+        if not test_files:
+            return self.file_paths
+        return test_files
+
+    def on_triangulation_complete(self, result):
+        self.triangulation_result = result
+        if result['success']:
+            geo = result['location_geographic']
+            print(f"[TRIANGULATION] 🎯 Wynik: {geo['lat']:.8f}, {geo['lon']:.8f}")
+            
+    def get_triangulation_result(self):
+        return self.triangulation_result
+
+    def on_jamming_detected(self, events):
+        pass
 
     def shutdown_server(self):
         if self.http_server:
-            print("[WORKER] Zamykanie serwera HTTP...")
             self.http_server.shutdown() 
             self.http_thread.join() 
             self.http_server = None
-            self.http_thread = None
-            print("[WORKER] Serwer HTTP zamknięty.")
-        
-        if self.jamming_thread and self.jamming_thread.is_alive():
-            print("[WORKER] Czekam na zakończenie analizy jammingu...")
-            self.jamming_thread.join(timeout=5)
-            if self.jamming_thread.is_alive():
-                print("[WORKER] ⚠️ OSTRZEŻENIE: Analiza jammingu nadal trwa w tle...")
-            else:
-                print("[WORKER] Analiza jammingu zakończona.")
-        
-        if self.triangulation_thread and self.triangulation_thread.is_alive():
-            print("[WORKER] Czekam na zakończenie triangulacji...")
-            self.stop_requested = True
-            self.triangulation_thread.join(timeout=3)
-            if self.triangulation_thread.is_alive():
-                print("[WORKER] ⚠️ OSTRZEŻENIE: Triangulacja nadal trwa (zostanie zatrzymana automatycznie)...")
-            else:
-                print("[WORKER] Triangulacja zakończona.")
 
-    def use_get_data(self):
-        if self.current_buffcnt > 0:
-            print(f"Aktualny buffcnt: {self.current_buffcnt}")
-            print(f"Pozycja: {self.current_lat}, {self.current_lon}")
-        
-        data = self.get_current_position_data()
-        if data['buffcnt'] > 0:
-            print(f"Kompletne dane: {data}")
-
-
-# PORADNIK DO INNEGO UŻYCIA !!!
-# Przykład użycia analizy jammingu jako multithread:
-# 
-# def on_jamming_result(start_sample, end_sample):
-#     if start_sample is not None:
-#         print(f"Wykryto jamming: próbki {start_sample} - {end_sample}")
-#     else:
-#         print("Nie wykryto jammingu")
-#
-# # Stwórz wątek z progiem mocy 120.0
-# thread = GPSAnalysisThread(["/path/to/file.bin"], power_threshold=120.0)
-# thread.jamming_analysis_complete.connect(on_jamming_result)
-# thread.start()
+    def get_current_position_data(self):
+        return {
+            'buffcnt': self.current_buffcnt,
+            'lat': self.current_lat,
+            'lon': self.current_lon,
+            'nsat': self.current_nsat,
+            'jamming': self.jamming_detected
+        }
