@@ -865,17 +865,7 @@ class MainWindow(QMainWindow):
             first_result = points[0]
             
             if first_result.get('type') == 'jamming':
-                jamming_text = f"Wykryto {len(points)} okres(ów) jammingu:\n\n"
-                
-                for result in points:
-                    event_num = result.get('event_number', '?')
-                    start_sample = result.get('start_sample')
-                    end_sample = result.get('end_sample')
-                    duration = result.get('duration', 0)
-                    
-                    jamming_text += f"Zdarzenie {event_num}:\n"
-                    duration_ms = (duration / 2048000) * 1000
-                    jamming_text += f"  Czas: {duration_ms:.2f} ms\n\n"
+                jamming_text = "🚨 Wykryto jamming w pliku!\n\n"
                 self.results_text.setPlainText(jamming_text)
                 
                 triangulation = first_result.get('triangulation')
