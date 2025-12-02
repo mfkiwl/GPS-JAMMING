@@ -238,21 +238,39 @@ class App(tk.Tk):
 
         # Tryb ataku
         self.spoofer_attack_var = tk.StringVar(value="jump")
+        self.spoofer_attack_var.trace_add("write", self.on_spoofer_attack_change)
         attack_frame = tk.Frame(self.spoofer_config_frame)
         attack_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,10))
         attack_frame.columnconfigure(1, weight=1)
+        attack_frame.columnconfigure(2, weight=1)
         tk.Label(attack_frame, text="Tryb ataku spoofującego:", font=("Arial", 10, "bold"))\
-            .grid(row=0, column=0, columnspan=2, sticky="w")
+            .grid(row=0, column=0, columnspan=3, sticky="w")
         tk.Radiobutton(attack_frame, text="Position Jump Attack (Overt Spoofing)",
                        variable=self.spoofer_attack_var, value="jump")\
             .grid(row=1, column=0, sticky="w", padx=(10,0))
-        tk.Radiobutton(attack_frame, text="Constellation Inconsistency (Ghosting)",
-                       variable=self.spoofer_attack_var, value="ghost")\
+        tk.Radiobutton(attack_frame, text="False Satellite Injection",
+                       variable=self.spoofer_attack_var, value="false_sat")\
             .grid(row=1, column=1, sticky="w", padx=(24,0))
+        tk.Radiobutton(attack_frame, text="Selective Injection",
+                       variable=self.spoofer_attack_var, value="selective")\
+            .grid(row=1, column=2, sticky="w", padx=(24,0))
+        
+        # Selective Injection - ilość satelitów (umieszczony poniżej attack_frame)
+        self.selective_sat_frame = tk.Frame(self.spoofer_config_frame)
+        self.selective_sat_frame.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10,0))
+        self.selective_sat_frame.grid_remove()
+        tk.Label(self.selective_sat_frame, text="Ilość wstrzykiwanych satelitów:", font=("Arial", 10, "bold"))\
+            .grid(row=0, column=0, columnspan=3, sticky="w", pady=(0,5))
+        self.selective_sat_count_var = tk.StringVar(value="2")
+        sat_counts = [("2 satelity", "2"), ("3 satelity", "3"), ("4 satelity", "4")]
+        for i, (text, value) in enumerate(sat_counts):
+            tk.Radiobutton(self.selective_sat_frame, text=text,
+                          variable=self.selective_sat_count_var, value=value)\
+                .grid(row=1, column=i, sticky="w", padx=(10 if i == 0 else 20, 0))
 
         # Lokalizacja nadajnika
         tk.Label(self.spoofer_config_frame, text="Lokalizacja nadajnika:", font=("Arial", 10, "bold"))\
-            .grid(row=1, column=0, columnspan=2, sticky="w", pady=(0,4))
+            .grid(row=2, column=0, columnspan=2, sticky="w", pady=(12,4))
         emitter_labels = [
             "Szerokość geograficzna spoofera:",
             "Długość geograficzna spoofera:",
@@ -261,16 +279,16 @@ class App(tk.Tk):
         ]
         validators = [self.v_lat_key, self.v_lon_key, self.v_alt_key, self.v_range_key]
         self.spoofer_emitter_entries = []
-        for idx, label in enumerate(emitter_labels, start=2):
+        for idx, label in enumerate(emitter_labels, start=3):
             lbl = tk.Label(self.spoofer_config_frame, text=label, width=32, anchor="e")
-            ent = tk.Entry(self.spoofer_config_frame, width=40, validate="key", validatecommand=validators[idx-2])
+            ent = tk.Entry(self.spoofer_config_frame, width=40, validate="key", validatecommand=validators[idx-3])
             lbl.grid(row=idx, column=0, padx=(0,10), pady=4, sticky="e")
             ent.grid(row=idx, column=1, pady=4, sticky="we")
             self.spoofer_emitter_entries.append(ent)
 
         # Ustawienia czasu
         timing_frame = tk.Frame(self.spoofer_config_frame)
-        timing_frame.grid(row=6, column=0, columnspan=2, sticky="we", pady=(8,4))
+        timing_frame.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10,4))
         timing_frame.columnconfigure(1, weight=1)
         tk.Label(timing_frame, text="Ustawienia czasu spoofera:", font=("Arial", 10, "bold"))\
             .grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,4))
@@ -282,7 +300,7 @@ class App(tk.Tk):
         # Tryb sygnału spoofowanego
         self.spoof_signal_mode_var = tk.StringVar(value="static")
         signal_mode_frame = tk.Frame(self.spoofer_config_frame)
-        signal_mode_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=(10,4))
+        signal_mode_frame.grid(row=8, column=0, columnspan=2, sticky="w", pady=(10,4))
         signal_mode_frame.columnconfigure(1, weight=1)
         tk.Label(signal_mode_frame, text="Tryb sygnału spoofowanego:", font=("Arial", 10, "bold"))\
             .grid(row=0, column=0, columnspan=2, sticky="w")
@@ -295,7 +313,7 @@ class App(tk.Tk):
 
         # Statyczna lokalizacja fikcyjna
         self.spoof_static_frame = tk.Frame(self.spoofer_config_frame)
-        self.spoof_static_frame.grid(row=8, column=0, columnspan=2, sticky="we")
+        self.spoof_static_frame.grid(row=9, column=0, columnspan=2, sticky="we")
         tk.Label(self.spoof_static_frame, text="Lokalizacja fikcyjna (statyczna):",
                  font=("Arial", 10, "bold"))\
             .grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,4))
@@ -315,7 +333,7 @@ class App(tk.Tk):
 
         # Ruchoma lokalizacja fikcyjna
         self.spoof_mobile_frame = tk.Frame(self.spoofer_config_frame)
-        self.spoof_mobile_frame.grid(row=9, column=0, columnspan=2, sticky="we", pady=(8,0))
+        self.spoof_mobile_frame.grid(row=10, column=0, columnspan=2, sticky="we", pady=(8,0))
         self.spoof_mobile_frame.columnconfigure(1, weight=1)
         self.spoof_mobile_frame.columnconfigure(3, weight=1)
         tk.Label(self.spoof_mobile_frame, text="Lokalizacja fikcyjna (ruchoma):",
@@ -364,8 +382,9 @@ class App(tk.Tk):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.abspath(os.path.join(base_dir, os.pardir))
         gps_dir  = os.path.join(root_dir, "gps-sdr-sim")
+        data_dir = os.path.join(os.path.dirname(root_dir), "data", "sim_data")
         self.GPS_SDR_SIM_PATH  = os.path.join(gps_dir, "gps-sdr-sim")
-        self.EPHERIS_FILE_PATH = os.path.join(gps_dir, "brdc2830.25n")
+        self.EPHERIS_FILE_PATH = os.path.join(data_dir, "brdc2830.25n")
         self.JAMMERS_DIR_PATH = os.path.join(base_dir, "jammers")
         self.MIXER_SCRIPT_PATH = os.path.join(base_dir, "add_jammer_and_mix.py")
         self.WEAKEN_SCRIPT_PATH = os.path.join(base_dir, "weaken_gps.py")
@@ -501,6 +520,15 @@ class App(tk.Tk):
         else:
             self.spoofer_warning_lbl.grid_remove()
             self.spoofer_config_frame.grid(row=1, column=0, sticky="we")
+    
+    def on_spoofer_attack_change(self, *args):
+        if not hasattr(self, "selective_sat_frame"):
+            return
+        attack_type = self.spoofer_attack_var.get()
+        if attack_type == "selective":
+            self.selective_sat_frame.grid()
+        else:
+            self.selective_sat_frame.grid_remove()
 
     def set_basic_defaults(self):
         # domysle wartosci
@@ -536,7 +564,7 @@ class App(tk.Tk):
 
         spoofer_emitter_defaults = [
             "50.0000500",
-            "19.9050500",
+            "19.9000500",
             "225.0",
             "500"
         ]
@@ -1176,18 +1204,50 @@ class App(tk.Tk):
             ]
             gps_cmd_legit.extend(env_flags)
 
+            ephemeris_file = self.EPHERIS_FILE_PATH
+            if attack_type == "selective":
+                sat_count = self.selective_sat_count_var.get()
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                root_dir = os.path.abspath(os.path.join(base_dir, os.pardir))
+                data_dir = os.path.join(os.path.dirname(root_dir), "data", "sim_data")
+                ephemeris_file = os.path.join(data_dir, f"{sat_count}_fake_PRN.25n")
+                print(f"Selective Injection: używam pliku efemeryd {sat_count}_fake_PRN.25n")
+            
             gps_cmd_spoofer = [
                 self.GPS_SDR_SIM_PATH,
-                "-e", self.EPHERIS_FILE_PATH
+                "-e", ephemeris_file
             ]
             if fake_traj_path:
                 gps_cmd_spoofer.extend(["-u", fake_traj_path])
             else:
                 gps_cmd_spoofer.extend(["-l", f"{fictitious_static['lat']},{fictitious_static['lon']},{fictitious_static['alt']}" ])
+            
+            spoofer_time = t_stationary
+            if attack_type == "false_sat":
+                from datetime import datetime, timedelta
+                try:
+                    dt = datetime.strptime(t_stationary, "%Y/%m/%d,%H:%M:%S")
+                    dt_shifted = dt + timedelta(hours=6)
+                    spoofer_time = dt_shifted.strftime("%Y/%m/%d,%H:%M:%S")
+                    print(f"False Satellite Injection: przesunięcie czasu spoofera o 6h: {t_stationary} -> {spoofer_time}")
+                except ValueError:
+                    print(f"Ostrzeżenie: nie można przetworzyć czasu {t_stationary}, używam oryginalnego")
+                    spoofer_time = t_stationary
+            elif attack_type == "selective":
+                from datetime import datetime, timedelta
+                try:
+                    dt = datetime.strptime(t_stationary, "%Y/%m/%d,%H:%M:%S")
+                    dt_shifted = dt + timedelta(hours=14)
+                    spoofer_time = dt_shifted.strftime("%Y/%m/%d,%H:%M:%S")
+                    print(f"Selective Injection: przesunięcie czasu spoofera o 14h: {t_stationary} -> {spoofer_time}")
+                except ValueError:
+                    print(f"Ostrzeżenie: nie można przetworzyć czasu {t_stationary}, używam oryginalnego")
+                    spoofer_time = t_stationary
+            
             gps_cmd_spoofer.extend([
                 "-b", BITS,
                 "-d", str(seconds),
-                "-T", t_stationary,
+                "-T", spoofer_time,
                 "-o", spoofer_filename,
                 "-s", SAMPLERATE,
                 "-v"
