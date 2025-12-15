@@ -1,769 +1,392 @@
 #include "nml.h"
 #include "sdr.h"
+#define HALF_WEEK_SEC 302400.0
+#define FULL_WEEK_SEC 604800.0
+#define WGS84_A 6378137.0
+#define WGS84_FINV 298.257223563
+#define CONVERGENCE_TOL 1e-10
+#define DETERMINANT_TOL 1e-12
+#define MAX_ITER_POSITION 10
+#define MAX_ITER_GEODETIC 50
+#define COORD_DIM 3
+#define STATE_DIM 4
+#define SQ(x) ((x) * (x))
+#define CUBE(x) ((x) * (x) * (x))
+#define OBS_IDX(prn, field) (((prn) - 1) * 14 + (field))
+typedef struct {
+    double ecef[COORD_DIM];
+    double clkBias;
+} ReceiverState;
+typedef struct {
+    double pos[COORD_DIM];
+    double clkCorr;
+} SatelliteData;
+typedef struct {
+    double lat;
+    double lon;
+    double alt;
+} GeodeticCoord;
+typedef struct {
+    double azimuth;
+    double elevation;
+    double range;
+} TopocentricCoord;
+static void wrapTimeToHalfWeek(double rawTime, double *wrapped);
+static double computeEccentricAnomaly(double meanAnomaly, double eccentricity,
+                                      int iterations);
+static void applyEarthRotation(const double satPos[], double travelTime,
+                               double rotated[]);
+static int computeKeplerianPosition(const eph_t *eph, double txTime,
+                                    SatelliteData *sat);
+static int computeGlonassPosition(const geph_t *geph, double txTime,
+                                  SatelliteData *sat);
+static void initWeightMatrix(int numSats, double *weights);
+static void ecefToGeodetic(const double ecef[], GeodeticCoord *geo);
+static int ecefToTopocentric(const double refEcef[], const double deltaXyz[],
+                             TopocentricCoord *topo);
+static int validateEphemerisGps(int prn);
+static int validateEphemerisGlo(int prn);
+static void markSatelliteInvalid(int prn, const char *reason);
+typedef struct {
+    double *pseudoranges;
+    double *satPositions;
+    double *rcvrTow;
+    double *rawPr;
+    double *corrPr;
+    double *snr;
+} PvtBuffers;
+static PvtBuffers *allocatePvtBuffers(int numSat) {
+    PvtBuffers *buf = (PvtBuffers *)malloc(sizeof(PvtBuffers));
+    if (!buf)
+        return NULL;
+    buf->pseudoranges = (double *)malloc(numSat * sizeof(double));
+    buf->satPositions = (double *)malloc(numSat * COORD_DIM * sizeof(double));
+    buf->rcvrTow = (double *)malloc(numSat * sizeof(double));
+    buf->rawPr = (double *)malloc(numSat * sizeof(double));
+    buf->corrPr = (double *)malloc(numSat * sizeof(double));
+    buf->snr = (double *)malloc(numSat * sizeof(double));
+    return buf;
+}
 
-extern int pvtProcessor(void) {
-    mlock(hobsvecmtx);
-    int numSat = sdrstat.nsatValid;
-    unmlock(hobsvecmtx);
+static void freePvtBuffers(PvtBuffers *buf) {
+    if (!buf)
+        return;
+    free(buf->pseudoranges);
+    free(buf->satPositions);
+    free(buf->rcvrTow);
+    free(buf->rawPr);
+    free(buf->corrPr);
+    free(buf->snr);
+    free(buf);
+}
 
-    double *pr_v = (double *)malloc(numSat * sizeof(double));
-    double *Xs_v = (double *)malloc(numSat * 3 * sizeof(double));
+typedef struct {
+    nml_mat *design;
+    nml_mat *weight;
+    nml_mat *residual;
+    nml_mat *solution;
+    nml_mat *position;
+    nml_mat *designT;
+    nml_mat *ata;
+    nml_mat *atw;
+    nml_mat *atwa;
+    nml_mat *invAta;
+    nml_mat *invAtwa;
+    nml_mat *gain1;
+    nml_mat *gain2;
+    nml_mat *tempState;
+} LsqMatrices;
+static LsqMatrices *initLsqMatrices(int numObs) {
+    LsqMatrices *m = (LsqMatrices *)malloc(sizeof(LsqMatrices));
+    if (!m)
+        return NULL;
+    m->solution = nml_mat_new(STATE_DIM, 1);
+    m->position = nml_mat_new(STATE_DIM, 1);
+    m->weight = nml_mat_new(numObs, numObs);
+    m->residual = nml_mat_new(numObs, 1);
+    m->designT = nml_mat_new(STATE_DIM, numObs);
+    m->ata = nml_mat_new(STATE_DIM, STATE_DIM);
+    m->atw = nml_mat_new(STATE_DIM, numObs);
+    m->atwa = nml_mat_new(STATE_DIM, STATE_DIM);
+    m->invAta = nml_mat_new(STATE_DIM, STATE_DIM);
+    m->invAtwa = nml_mat_new(STATE_DIM, STATE_DIM);
+    m->gain1 = nml_mat_new(STATE_DIM, numObs);
+    m->gain2 = nml_mat_new(STATE_DIM, numObs);
+    m->tempState = nml_mat_new(STATE_DIM, 1);
+    m->design = NULL;
+    return m;
+}
 
-    double *rcvr_tow_v = (double *)malloc(numSat * sizeof(double));
-    double *prRaw_v = (double *)malloc(numSat * sizeof(double));
-    double *prSvClkCorr_v = (double *)malloc(numSat * sizeof(double));
-    double *snr_v = (double *)malloc(numSat * sizeof(double));
+static void freeLsqMatrices(LsqMatrices *m) {
+    if (!m)
+        return;
+    nml_mat_free(m->solution);
+    nml_mat_free(m->design);
+    nml_mat_free(m->weight);
+    nml_mat_free(m->position);
+    nml_mat_free(m->residual);
+    nml_mat_free(m->designT);
+    nml_mat_free(m->ata);
+    nml_mat_free(m->atw);
+    nml_mat_free(m->atwa);
+    nml_mat_free(m->invAta);
+    nml_mat_free(m->invAtwa);
+    nml_mat_free(m->gain1);
+    nml_mat_free(m->gain2);
+    nml_mat_free(m->tempState);
+    free(m);
+}
 
-    double tau;
-    double lambda;
-    double phi;
-    double height;
-    double rcvr_tow;
-    double lat, lon;
-
-    mlock(hobsvecmtx);
-    for (int i = 0; i < numSat; i++) {
-        int prn = sdrstat.obsValidList[i];
-        prRaw_v[i] = sdrstat.obs_v[(prn - 1) * 11 + 5];
-        rcvr_tow_v[i] = sdrstat.obs_v[(prn - 1) * 11 + 6];
-        snr_v[i] = sdrstat.obs_v[(prn - 1) * 11 + 8];
+static void wrapTimeToHalfWeek(double rawTime, double *wrapped) {
+    *wrapped = rawTime;
+    if (rawTime > HALF_WEEK_SEC) {
+        *wrapped = rawTime - FULL_WEEK_SEC;
+    } else if (rawTime < -HALF_WEEK_SEC) {
+        *wrapped = rawTime + FULL_WEEK_SEC;
     }
-    unmlock(hobsvecmtx);
+}
 
-    rcvr_tow = rcvr_tow_v[0];
+extern void normalizeGpsTime(double time, double *corrTime) {
+    wrapTimeToHalfWeek(time, corrTime);
+}
 
-    double xyzdt_v[] = {0, 0, 0, 0};
-    double xs_v[3];
-    double svClkCorr;
-    double transmitTime;
-    double gdop = 0.0;
-    int ret = 0;
-
-    for (int i = 0; i < numSat; i++) {
-
-        mlock(hobsvecmtx);
-        pr_v[i] = prRaw_v[i] - sdrstat.xyzdt[3];
-        unmlock(hobsvecmtx);
-
-        tau = pr_v[i] / CTIME;
-
-        transmitTime = rcvr_tow - tau;
-        mlock(hobsvecmtx);
-        ret = satPos(&sdrch[sdrstat.obsValidList[i] - 1].nav.sdreph,
-                     transmitTime, xs_v, &svClkCorr);
-        unmlock(hobsvecmtx);
-        if (ret != 0) {
-            printf(
-                "Function satPos has xs NaN for G%02d, exiting pvtProcessor\n",
-                sdrstat.obsValidList[i]);
-            goto errorDetected;
-        }
-
-        if (isnan(xs_v[0]) || isnan(xs_v[0]) || isnan(xs_v[0])) {
-
-            goto errorDetected;
-        }
-
-        prSvClkCorr_v[i] = prRaw_v[i] + (CTIME * svClkCorr);
-
-        Xs_v[(i * 3) + 0] = xs_v[0];
-        Xs_v[(i * 3) + 1] = xs_v[1];
-        Xs_v[(i * 3) + 2] = xs_v[2];
-
-        mlock(hobsvecmtx);
-        int prn = sdrstat.obsValidList[i];
-        sdrstat.obs_v[(prn - 1) * 11 + 2] = xs_v[0];
-        sdrstat.obs_v[(prn - 1) * 11 + 3] = xs_v[1];
-        sdrstat.obs_v[(prn - 1) * 11 + 4] = xs_v[2];
-        unmlock(hobsvecmtx);
+static double computeEccentricAnomaly(double M, double e, int maxIter) {
+    double E = M;
+    for (int k = 0; k < maxIter; k++) {
+        double dE = (M - E + e * sin(E)) / (1.0 - e * cos(E));
+        E += dE;
     }
+    return E;
+}
 
-    if (sdrstat.nsatValid < 4) {
-        goto errorDetected;
+static int computeKeplerianPosition(const eph_t *eph, double txTime,
+                                    SatelliteData *sat) {
+    double sqrtA = sqrt(eph->A);
+    double semiMajor = eph->A;
+    double meanMotion0 = sqrt(MU / CUBE(semiMajor));
+    double tk = txTime - eph->toes;
+    if (tk > HALF_WEEK_SEC)
+        tk -= FULL_WEEK_SEC;
+    else if (tk < -HALF_WEEK_SEC)
+        tk += FULL_WEEK_SEC;
+    double n = meanMotion0 + eph->deln;
+    double Mk = eph->M0 + n * tk;
+    double Ek = computeEccentricAnomaly(Mk, eph->e, 3);
+    double sinE = sin(Ek);
+    double cosE = cos(Ek);
+    double sqrtOneMinusE2 = sqrt(1.0 - SQ(eph->e));
+    double vk = atan2(sqrtOneMinusE2 * sinE, cosE - eph->e);
+    double phik = eph->omg + vk;
+    double sin2phi = sin(2.0 * phik);
+    double cos2phi = cos(2.0 * phik);
+    double duk = eph->cus * sin2phi + eph->cuc * cos2phi;
+    double drk = eph->crs * sin2phi + eph->crc * cos2phi;
+    double dik = eph->cis * sin2phi + eph->cic * cos2phi;
+    double uk = phik + duk;
+    double rk = semiMajor * (1.0 - eph->e * cosE) + drk;
+    double ik = eph->i0 + eph->idot * tk + dik;
+    double xkp = rk * cos(uk);
+    double ykp = rk * sin(uk);
+    double Omegak =
+        eph->OMG0 + (eph->OMGd - OMEGAEDOT) * tk - OMEGAEDOT * eph->toes;
+    double cosOmega = cos(Omegak);
+    double sinOmega = sin(Omegak);
+    double cosInc = cos(ik);
+    double sinInc = sin(ik);
+    sat->pos[0] = xkp * cosOmega - ykp * sinOmega * cosInc;
+    sat->pos[1] = xkp * sinOmega + ykp * cosOmega * cosInc;
+    sat->pos[2] = ykp * sinInc;
+    if (isnan(sat->pos[0]) || isnan(sat->pos[1]) || isnan(sat->pos[2])) {
+        return -1;
     }
-
-    if (sdrini.ekfFilterOn == 0) {
-        ret = blsFilter(Xs_v, prSvClkCorr_v, numSat, xyzdt_v, &gdop);
-    } else {
-    }
-
-    if (isnan(xyzdt_v[0]) || isnan(xyzdt_v[1]) || isnan(xyzdt_v[2])) {
-        printf("Function estRcvrPosn gets NaN for xu, exiting pvtProcessor\n");
-        goto errorDetected;
-    }
-
-    ecef2lla(xyzdt_v[0], xyzdt_v[1], xyzdt_v[2], &lambda, &phi, &height);
-
-    lat = phi * 180.0 / M_PI;
-    lon = lambda * 180.0 / M_PI;
-
-    mlock(hobsvecmtx);
-    sdrstat.lat = lat;
-    sdrstat.lon = lon;
-    sdrstat.hgt = height;
-    sdrstat.gdop = gdop;
-    sdrstat.xyzdt[0] = xyzdt_v[0];
-    sdrstat.xyzdt[1] = xyzdt_v[1];
-    sdrstat.xyzdt[2] = xyzdt_v[2];
-    sdrstat.xyzdt[3] = xyzdt_v[3];
-    unmlock(hobsvecmtx);
-
-    free(Xs_v);
-    free(pr_v);
-
-    free(prRaw_v);
-    free(prSvClkCorr_v);
-    free(snr_v);
-    free(rcvr_tow_v);
-
+    double tc = txTime - eph->toes;
+    if (tc > HALF_WEEK_SEC)
+        tc -= FULL_WEEK_SEC;
+    else if (tc < -HALF_WEEK_SEC)
+        tc += FULL_WEEK_SEC;
+    double relativistic = -2.0 * sqrt(MU) / SQ(CTIME) * eph->e * sqrtA * sinE;
+    sat->clkCorr =
+        eph->f0 + eph->f1 * tc + eph->f2 * SQ(tc) - eph->tgd[0] + relativistic;
     return 0;
-
-errorDetected:
-
-    mlock(hobsvecmtx);
-    sdrstat.lat = 0.0;
-    sdrstat.lon = 0.0;
-    sdrstat.hgt = 0.0;
-    sdrstat.gdop = 0.0;
-    unmlock(hobsvecmtx);
-
-    free(Xs_v);
-    free(pr_v);
-
-    free(prRaw_v);
-    free(prSvClkCorr_v);
-    free(snr_v);
-    free(rcvr_tow_v);
-
-    return -1;
 }
 
-extern int blsFilter(double *X_v, double *pr_v, int numSat, double xyzdt_v[],
-                     double *gdop) {
-
-    numSat = sdrstat.nsatValid;
-
-    nml_mat *x, *A, *W, *pos, *omc;
-    nml_mat *At, *AtA, *AtW, *AtWA, *iAtA, *iAtWA, *iAtWAAt, *iAtWAAtW,
-        *tempPos;
-
-    x = nml_mat_new(4, 1);
-    pos = nml_mat_new(4, 1);
-
-    W = nml_mat_new(numSat, numSat);
-    omc = nml_mat_new(numSat, 1);
-    At = nml_mat_new(4, numSat);
-    AtA = nml_mat_new(4, 4);
-    AtW = nml_mat_new(4, numSat);
-    AtWA = nml_mat_new(4, 4);
-    iAtA = nml_mat_new(4, 4);
-    iAtWA = nml_mat_new(4, 4);
-    iAtWAAt = nml_mat_new(4, numSat);
-    iAtWAAtW = nml_mat_new(4, numSat);
-    tempPos = nml_mat_new(4, 1);
-
-    double Rot_X_v[] = {0, 0, 0};
-    double pos_v[] = {0, 0, 0, 0};
-    double rho2 = 0.0;
-    double travelTime = 0.0;
-    double omegatau = 0.0;
-    double rhoSq = 0.0;
-    double *A_v = (double *)calloc(numSat * 4, sizeof(double));
-    double *W_v = (double *)calloc(numSat * numSat, sizeof(double));
-    double det = 0.0;
-    double detTol = 1e-12;
-    double trop = 0.0;
-    double *omc_v = (double *)calloc(numSat, sizeof(double));
-    int ret = 0;
-    double az, el;
-    double D = 0.0;
-    double X[] = {0, 0, 0};
-    double dx[] = {0, 0, 0};
-    double normX = 100.0;
-    int iter = 0;
-
-    pos_v[0] = (double)sdrini.xu0_v[0];
-    pos_v[1] = (double)sdrini.xu0_v[1];
-    pos_v[2] = (double)sdrini.xu0_v[2];
-
-    mlock(hobsvecmtx);
-    sdrekf.varR = 5.0 * 5.0;
-    for (int i = 0; i < MAXSAT; i++) {
-        sdrekf.rk1_v[i] = 0.0;
+static int computeGlonassPosition(const geph_t *geph, double txTime,
+                                  SatelliteData *sat) {
+    gtime_t t = gpst2time(0, txTime);
+    double dt = timediff(t, geph->toe);
+    double dt2 = SQ(dt);
+    sat->pos[0] = geph->pos[0] + geph->vel[0] * dt + geph->acc[0] * dt2 * 0.5;
+    sat->pos[1] = geph->pos[1] + geph->vel[1] * dt + geph->acc[1] * dt2 * 0.5;
+    sat->pos[2] = geph->pos[2] + geph->vel[2] * dt + geph->acc[2] * dt2 * 0.5;
+    sat->clkCorr = -geph->taun + geph->gamn * dt;
+    if (isnan(sat->pos[0]) || isnan(sat->pos[1]) || isnan(sat->pos[2])) {
+        return -1;
     }
-    for (int k = 0; k < numSat; k++) {
-
-        int prn = sdrstat.obsValidList[k];
-        if (prn < 1 || prn > MAXSAT) {
-            continue;
-        }
-        sdrekf.rk1_v[prn - 1] = sdrekf.varR;
-
-        double el2 = sdrstat.obs_v[(prn - 1) * 11 + 10];
-        if ((sdrstat.azElCalculatedflag) && (el2 < 30)) {
-            sdrekf.rk1_v[prn - 1] =
-                sdrekf.varR + (25 - (25 / 15) * (el2 - 15.0)) *
-                                  (25 - (25 / 15) * (el2 - 15.0));
-        }
-
-        W_v[k + (k * numSat)] = 1.0 / sdrekf.rk1_v[prn - 1];
-    }
-    unmlock(hobsvecmtx);
-
-    int nmbOfIterations = 10;
-
-    for (int j = 0; j < nmbOfIterations; j++) {
-
-        if (normX < 1.0e-10) {
-
-            break;
-        }
-
-        for (int i = 0; i < numSat; i++) {
-
-            if (iter == 0) {
-                for (int k = 0; k < 3; k++) {
-                    Rot_X_v[k] = X_v[i * 3 + k];
-                }
-                trop = 2.0;
-            } else {
-
-                rho2 = (((X_v[i * 3 + 0] - pos_v[0]) *
-                         (X_v[i * 3 + 0] - pos_v[0])) +
-                        ((X_v[i * 3 + 1] - pos_v[1]) *
-                         (X_v[i * 3 + 1] - pos_v[1])) +
-                        ((X_v[i * 3 + 2] - pos_v[2]) *
-                         (X_v[i * 3 + 2] - pos_v[2])));
-
-                travelTime = sqrt(rho2) / CTIME;
-
-                omegatau = OMEGAEDOT * travelTime;
-                Rot_X_v[0] = (cos(omegatau) * X_v[i * 3 + 0]) +
-                             (sin(omegatau) * X_v[i * 3 + 1]);
-                Rot_X_v[1] = (-sin(omegatau) * X_v[i * 3 + 0]) +
-                             (cos(omegatau) * X_v[i * 3 + 1]);
-                Rot_X_v[2] = X_v[i * 3 + 2];
-
-                for (int i = 0; i < 3; i++) {
-                    X[i] = pos_v[i];
-                    dx[i] = Rot_X_v[i] - pos_v[i];
-                }
-                ret = topocent(X, dx, &az, &el, &D);
-                if (ret != 0) {
-                    printf("topocent function: error\n");
-                }
-                sdrstat.azElCalculatedflag = 1;
-
-                mlock(hobsvecmtx);
-                int prn = sdrstat.obsValidList[i];
-                if (prn >= 1 && prn <= MAXSAT) {
-                    int base = (prn - 1) * 11;
-                    sdrstat.obs_v[base + 2] = Rot_X_v[0];
-                    sdrstat.obs_v[base + 3] = Rot_X_v[1];
-                    sdrstat.obs_v[base + 4] = Rot_X_v[2];
-                    sdrstat.obs_v[base + 9] = az;
-                    sdrstat.obs_v[base + 10] = el;
-                }
-                unmlock(hobsvecmtx);
-
-                ret = tropo(sin(el * D2R), 0.0, 1013.0, 293.0, 50.0, 0.0, 0.0,
-                            0.0, &trop);
-                if (ret != 0) {
-                    printf("tropo function: error\n");
-                }
-            }
-
-            rhoSq = (((Rot_X_v[0] - pos_v[0]) * (Rot_X_v[0] - pos_v[0])) +
-                     ((Rot_X_v[1] - pos_v[1]) * (Rot_X_v[1] - pos_v[1])) +
-                     ((Rot_X_v[2] - pos_v[2]) * (Rot_X_v[2] - pos_v[2])));
-
-            omc_v[i] = pr_v[i] - sqrt(rhoSq) - pos_v[3] - trop;
-
-            A_v[i * 4 + 0] = (-(Rot_X_v[0] - pos_v[0])) / sqrt(rhoSq);
-            A_v[i * 4 + 1] = (-(Rot_X_v[1] - pos_v[1])) / sqrt(rhoSq);
-            A_v[i * 4 + 2] = (-(Rot_X_v[2] - pos_v[2])) / sqrt(rhoSq);
-            A_v[i * 4 + 3] = 1.0;
-        }
-
-        W = nml_mat_from(numSat, numSat, numSat * numSat, W_v);
-        A = nml_mat_from(numSat, 4, numSat * 4, A_v);
-        At = nml_mat_transp(A);
-
-        AtA = nml_mat_dot(At, A);
-        AtW = nml_mat_dot(At, W);
-        AtWA = nml_mat_dot(AtW, A);
-
-        nml_mat_lup *lupAtA;
-        lupAtA = nml_mat_lup_solve(AtA);
-        nml_mat_lup *lupAtWA;
-        lupAtWA = nml_mat_lup_solve(AtWA);
-
-        det = nml_mat_det(lupAtA);
-        if (fabs(det) < detTol) {
-            printf("Exiting estRcvrPosn, determinant=%lf\n", det);
-            goto errorDetected;
-        }
-
-        iAtA = nml_mat_inv(lupAtA);
-        nml_mat_lup_free(lupAtA);
-        iAtWA = nml_mat_inv(lupAtWA);
-        nml_mat_lup_free(lupAtWA);
-
-        iAtWAAt = nml_mat_dot(iAtWA, At);
-        iAtWAAtW = nml_mat_dot(iAtWAAt, W);
-        omc = nml_mat_from(numSat, 1, numSat, omc_v);
-        x = nml_mat_dot(iAtWAAtW, omc);
-
-        tempPos = nml_mat_from(4, 1, 4, pos_v);
-        pos = nml_mat_add(tempPos, x);
-
-        pos_v[0] = pos->data[0][0];
-        pos_v[1] = pos->data[1][0];
-        pos_v[2] = pos->data[2][0];
-        pos_v[3] = pos->data[3][0];
-
-        normX = sqrt(
-            (x->data[0][0] * x->data[0][0]) + (x->data[1][1] * x->data[1][1]) +
-            (x->data[2][2] * x->data[2][2]) + (x->data[3][3] * x->data[3][3]));
-
-        iter = iter + 1;
-    }
-
-    xyzdt_v[0] = pos->data[0][0];
-    xyzdt_v[1] = pos->data[1][0];
-    xyzdt_v[2] = pos->data[2][0];
-    xyzdt_v[3] = pos->data[3][0];
-
-    *gdop = sqrt(iAtA->data[0][0] + iAtA->data[1][1] + iAtA->data[2][2] +
-                 iAtA->data[3][3]);
-
-    mlock(hobsvecmtx);
-    for (int i = 0; i < MAXSAT; i++) {
-        sdrstat.vk1_v[i] = 0;
-    }
-    for (int j = 0; j < numSat; j++) {
-        int prn = sdrstat.obsValidList[j];
-        if (prn >= 1 && prn <= MAXSAT) {
-            sdrstat.vk1_v[prn - 1] = omc_v[j];
-        }
-    }
-    unmlock(hobsvecmtx);
-
-    nml_mat_free(x);
-    nml_mat_free(A);
-    nml_mat_free(W);
-    nml_mat_free(pos);
-    nml_mat_free(omc);
-    nml_mat_free(At);
-    nml_mat_free(AtA);
-    nml_mat_free(AtW);
-    nml_mat_free(AtWA);
-    nml_mat_free(iAtA);
-    nml_mat_free(iAtWA);
-    nml_mat_free(iAtWAAt);
-    nml_mat_free(iAtWAAtW);
-    nml_mat_free(tempPos);
-
-    free(A_v);
-    free(W_v);
-    free(omc_v);
-
     return 0;
-
-errorDetected:
-
-    xyzdt_v[0] = 0.0;
-    xyzdt_v[1] = 0.0;
-    xyzdt_v[2] = 0.0;
-    xyzdt_v[3] = 0.0;
-    *gdop = 0.0;
-
-    nml_mat_free(x);
-    nml_mat_free(A);
-    nml_mat_free(W);
-    nml_mat_free(pos);
-    nml_mat_free(omc);
-    nml_mat_free(At);
-    nml_mat_free(AtA);
-    nml_mat_free(AtW);
-    nml_mat_free(AtWA);
-    nml_mat_free(iAtA);
-    nml_mat_free(iAtWA);
-    nml_mat_free(iAtWAAt);
-    nml_mat_free(iAtWAAtW);
-    nml_mat_free(tempPos);
-
-    free(A_v);
-    free(W_v);
-    free(omc_v);
-
-    return -1;
 }
 
-extern void check_t(double time, double *corrTime) {
-
-    double halfweek = 302400.0;
-
-    *corrTime = time;
-
-    if (time > halfweek) {
-        *corrTime = time - (2 * halfweek);
-    } else if (time < -halfweek) {
-        *corrTime = time + (2 * halfweek);
-    }
-}
-
-extern void ecef2lla(double x, double y, double z, double *lambda, double *phi,
-                     double *height) {
-
-    double A = 6378137.0;
-    double F = 1.0 / 298.257223563;
-    double E = sqrt((2 * F) - (F * F));
-
-    *lambda = atan2(y, x);
-    double p = sqrt(x * x + y * y);
-
-    *height = 0.0;
-    *phi = atan2(z, p * (1.0 - E * E));
-    double N = A / sqrt((1.0 - sin(*phi)) * (1.0 - sin(*phi)));
-    double delta_h = 1000000;
-
-    while (delta_h > 0.01) {
-        double prev_h = *height;
-        *phi = atan2(z, p * (1 - (E * E) * (N / (N + *height))));
-        N = A / sqrt((1 - ((E * sin(*phi)) * (E * sin(*phi)))));
-        *height = (p / cos(*phi)) - N;
-        delta_h = fabs(*height - prev_h);
-    }
-}
-
-extern int satPos(sdreph_t *sdreph, double transmitTime, double svPos[3],
-                  double *svClkCorr) {
-
-    /* GLONASS uses geph (position/velocity/acceleration) */
+extern int computeSvCoordinates(sdreph_t *sdreph, double transmitTime,
+                                double svPos[3], double *svClkCorr) {
+    SatelliteData satData = {{0}, 0};
+    int status;
     if (sdreph->ctype == CTYPE_G1) {
-        gtime_t t = gpst2time(0, transmitTime);
-        double dt = timediff(t, sdreph->geph.toe);
-        double dt2 = dt * dt;
-        
-        /* Extrapolate position using velocity and acceleration */
-        svPos[0] = sdreph->geph.pos[0] + sdreph->geph.vel[0] * dt + 
-                   sdreph->geph.acc[0] * dt2 / 2.0;
-        svPos[1] = sdreph->geph.pos[1] + sdreph->geph.vel[1] * dt + 
-                   sdreph->geph.acc[1] * dt2 / 2.0;
-        svPos[2] = sdreph->geph.pos[2] + sdreph->geph.vel[2] * dt + 
-                   sdreph->geph.acc[2] * dt2 / 2.0;
-        
-        /* GLONASS clock correction */
-        *svClkCorr = -sdreph->geph.taun + sdreph->geph.gamn * dt;
-        
-        if (isnan(svPos[0]) || isnan(svPos[1]) || isnan(svPos[2])) {
-            goto errorDetected;
+        status = computeGlonassPosition(&sdreph->geph, transmitTime, &satData);
+    } else {
+        status = computeKeplerianPosition(&sdreph->eph, transmitTime, &satData);
+    }
+    if (status == 0) {
+        svPos[0] = satData.pos[0];
+        svPos[1] = satData.pos[1];
+        svPos[2] = satData.pos[2];
+        *svClkCorr = satData.clkCorr;
+    }
+    return status;
+}
+
+static void applyEarthRotation(const double satPos[], double travelTime,
+                               double rotated[]) {
+    double omega_tau = OMEGAEDOT * travelTime;
+    double cosOmega = cos(omega_tau);
+    double sinOmega = sin(omega_tau);
+    rotated[0] = cosOmega * satPos[0] + sinOmega * satPos[1];
+    rotated[1] = -sinOmega * satPos[0] + cosOmega * satPos[1];
+    rotated[2] = satPos[2];
+}
+
+extern void buildAxisRotation(double R[9], double angleDeg, int axis) {
+    memset(R, 0, 9 * sizeof(double));
+    R[0] = R[4] = R[8] = 1.0;
+    double rad = angleDeg * M_PI / 180.0;
+    double c = cos(rad);
+    double s = sin(rad);
+    switch (axis) {
+    case 1:
+        R[4] = c;
+        R[5] = s;
+        R[7] = -s;
+        R[8] = c;
+        break;
+    case 2:
+        R[0] = c;
+        R[2] = -s;
+        R[6] = s;
+        R[8] = c;
+        break;
+    case 3:
+        R[0] = c;
+        R[1] = s;
+        R[3] = -s;
+        R[4] = c;
+        break;
+    }
+}
+
+static void ecefToGeodetic(const double ecef[], GeodeticCoord *geo) {
+    double f = 1.0 / WGS84_FINV;
+    double e2 = (2.0 * f) - SQ(f);
+    geo->lon = atan2(ecef[1], ecef[0]);
+    double p = sqrt(SQ(ecef[0]) + SQ(ecef[1]));
+    geo->alt = 0.0;
+    geo->lat = atan2(ecef[2], p * (1.0 - e2));
+    double N = WGS84_A / sqrt(1.0 - SQ(sin(geo->lat)));
+    double deltaH = 1e6;
+    while (deltaH > 0.01) {
+        double prevH = geo->alt;
+        geo->lat = atan2(ecef[2], p * (1.0 - e2 * N / (N + geo->alt)));
+        N = WGS84_A / sqrt(1.0 - SQ(e2 * sin(geo->lat)));
+        geo->alt = p / cos(geo->lat) - N;
+        deltaH = fabs(geo->alt - prevH);
+    }
+}
+
+extern void cartesianToGeodetic(double x, double y, double z, double *lambda,
+                                double *phi, double *height) {
+    double ecef[3] = {x, y, z};
+    GeodeticCoord geo;
+    ecefToGeodetic(ecef, &geo);
+    *lambda = geo.lon;
+    *phi = geo.lat;
+    *height = geo.alt;
+}
+
+extern int xyz2GeodeticDeg(double a, double finv, double X, double Y, double Z,
+                           double *dphi, double *dlambda, double *h) {
+    *h = 0.0;
+    double esq = (finv < 1e-20) ? 0.0 : (2.0 - 1.0 / finv) / finv;
+    double oneMinusE2 = 1.0 - esq;
+    double p = sqrt(SQ(X) + SQ(Y));
+    *dlambda = (p > 1e-20) ? atan2(Y, X) * R2D : 0.0;
+    if (*dlambda < 0)
+        *dlambda += 360.0;
+    double r = sqrt(SQ(p) + SQ(Z));
+    double sinPhi = (r > 1e-20) ? Z / r : 0.0;
+    *dphi = asin(sinPhi);
+    if (r < 1e-20) {
+        printf("xyz2GeodeticDeg--- errorDetected\n");
+        return -1;
+    }
+    *h = r - a * (1.0 - SQ(sinPhi) / finv);
+    for (int iter = 0; iter < MAX_ITER_GEODETIC; iter++) {
+        double sp = sin(*dphi);
+        double cp = cos(*dphi);
+        double Nphi = a / sqrt(1.0 - esq * SQ(sp));
+        double dP = p - (Nphi + *h) * cp;
+        double dZ = Z - (Nphi * oneMinusE2 + *h) * sp;
+        *h += sp * dZ + cp * dP;
+        *dphi += (cp * dZ - sp * dP) / (Nphi + *h);
+        if (SQ(dP) + SQ(dZ) < 1e-10)
+            break;
+        if (iter == MAX_ITER_GEODETIC - 1) {
+            printf("xyz2GeodeticDeg: convergence failed after %d iterations\n",
+                   iter);
         }
-        
-        return 0;
     }
-
-    /* GPS/Galileo use eph (Keplerian parameters) */
-    double toe = sdreph->eph.toes;
-    double toc = toe;
-
-    double sqrta = sqrt(sdreph->eph.A);
-    double e = sdreph->eph.e;
-    double M0 = sdreph->eph.M0;
-    double omega = sdreph->eph.omg;
-    double i0 = sdreph->eph.i0;
-    double Omega0 = sdreph->eph.OMG0;
-    double deltan = sdreph->eph.deln;
-    double idot = sdreph->eph.idot;
-    double Omegadot = sdreph->eph.OMGd;
-    double cuc = sdreph->eph.cuc;
-    double cus = sdreph->eph.cus;
-    double crc = sdreph->eph.crc;
-    double crs = sdreph->eph.crs;
-    double cic = sdreph->eph.cic;
-    double cis = sdreph->eph.cis;
-    double af0 = sdreph->eph.f0;
-    double af1 = sdreph->eph.f1;
-    double af2 = sdreph->eph.f2;
-    double tgd = sdreph->eph.tgd[0];
-
-    double t = transmitTime;
-    double A;
-    double n0, n;
-    double tk, tc;
-    double Mk, vk, ik, phik, u_k, rk, Omega_k;
-    double delta_uk, delta_rk, delta_ik;
-    double x_kp, y_kp;
-    double xk, yk, zk;
-    double E0, Ek, dtr, dt;
-    int ii;
-
-    svPos[0] = 0.0;
-    svPos[1] = 0.0;
-    svPos[2] = 0.0;
-
-    A = sqrta * sqrta;
-
-    n0 = sqrt(MU / (A * A * A));
-
-    tk = t - toe;
-    if (tk > 302400) {
-        tk = tk - (2 * 302400);
-    } else if (tk < -302400) {
-        tk = tk + (604800);
-    }
-
-    n = n0 + deltan;
-
-    Mk = M0 + n * tk;
-
-    E0 = Mk;
-
-    for (ii = 0; ii < 3; ii++) {
-        Ek = E0 + (Mk - E0 + e * sin(E0)) / (1 - e * cos(E0));
-        E0 = Ek;
-    }
-
-    vk = 2 * atan(sqrt((1.0 + e) / (1.0 - e)) * tan(Ek / 2));
-
-    phik = omega + vk;
-
-    delta_uk = cus * sin(2.0 * phik) + cuc * cos(2.0 * phik);
-    delta_rk = crs * sin(2.0 * phik) + crc * cos(2.0 * phik);
-    delta_ik = cis * sin(2.0 * phik) + cic * cos(2.0 * phik);
-
-    u_k = phik + delta_uk;
-
-    rk = A * (1.0 - (e * cos(Ek))) + delta_rk;
-
-    ik = i0 + (idot * tk) + delta_ik;
-
-    x_kp = rk * cos(u_k);
-    y_kp = rk * sin(u_k);
-
-    Omega_k = Omega0 + (Omegadot - OMEGAEDOT) * tk - (OMEGAEDOT * toe);
-
-    xk = (x_kp * cos(Omega_k)) - (y_kp * sin(Omega_k) * cos(ik));
-    yk = (x_kp * sin(Omega_k)) + (y_kp * cos(Omega_k) * cos(ik));
-    zk = y_kp * sin(ik);
-
-    if (isnan(xk) || isnan(yk) || isnan(zk)) {
-        goto errorDetected;
-    }
-
-    svPos[0] = xk;
-    svPos[1] = yk;
-    svPos[2] = zk;
-
-    tc = t - toc;
-    if (tc > 302400) {
-        tc = tc - (2 * 302400);
-    } else if (tc < -302400) {
-        tc = tc + (604800);
-    }
-
-    dtr = -2 * sqrt(MU) / (CTIME * CTIME) * e * sqrta * sin(Ek);
-
-    dt = af0 + (af1 * tc) + (af2 * (tc * tc)) - tgd + dtr;
-    *svClkCorr = dt;
-
+    *dphi *= R2D;
     return 0;
-
-errorDetected:
-    return -1;
 }
 
-extern void rot(double R[9], double angle, int axis) {
-    R[0] = 1.0;
-    R[4] = 1.0;
-    R[8] = 1.0;
-    R[1] = 0.0;
-    R[3] = 0.0;
-    R[6] = 0.0;
-    R[2] = 0.0;
-    R[5] = 0.0;
-    R[7] = 0.0;
-
-    double cang, sang;
-    cang = cos(angle * M_PI / 180.0);
-    sang = sin(angle * M_PI / 180.0);
-
-    if (axis == 1) {
-        R[4] = cang;
-        R[8] = cang;
-        R[5] = sang;
-        R[7] = -sang;
+static int ecefToTopocentric(const double refEcef[], const double deltaXyz[],
+                             TopocentricCoord *topo) {
+    double phi, lambda, h;
+    int ret = xyz2GeodeticDeg(WGS84_A, WGS84_FINV, refEcef[0], refEcef[1],
+                              refEcef[2], &phi, &lambda, &h);
+    if (ret != 0)
+        return ret;
+    double cl = cos(lambda * D2R);
+    double sl = sin(lambda * D2R);
+    double cb = cos(phi * D2R);
+    double sb = sin(phi * D2R);
+    double E = -sl * deltaXyz[0] + cl * deltaXyz[1];
+    double N =
+        -sb * cl * deltaXyz[0] - sb * sl * deltaXyz[1] + cb * deltaXyz[2];
+    double U = cb * cl * deltaXyz[0] + cb * sl * deltaXyz[1] + sb * deltaXyz[2];
+    double horDist = sqrt(SQ(E) + SQ(N));
+    if (horDist < 1e-20) {
+        topo->azimuth = 0.0;
+        topo->elevation = 90.0;
+    } else {
+        topo->azimuth = atan2(E, N) / D2R;
+        topo->elevation = atan2(U, horDist) / D2R;
     }
-    if (axis == 2) {
-        R[0] = cang;
-        R[8] = cang;
-        R[2] = -sang;
-        R[6] = sang;
-    }
-    if (axis == 3) {
-        R[0] = cang;
-        R[4] = cang;
-        R[3] = -sang;
-        R[1] = sang;
-    }
+    if (topo->azimuth < 0)
+        topo->azimuth += 360.0;
+    topo->range = sqrt(SQ(deltaXyz[0]) + SQ(deltaXyz[1]) + SQ(deltaXyz[2]));
+    return 0;
 }
 
-extern void precheckObs() {
-
-    int ret = 0;
-    int updateRequired = 0;
-    int prn = 0;
-    int i = 0;
-    double tol = 1e-15;
-    char buffer[MSG_LENGTH];
-
-    mlock(hobsvecmtx);
-    for (i = 0; i < sdrstat.nsatValid; i++) {
-        prn = sdrstat.obsValidList[i];
-
-        if (prn < 1 || prn > MAXSAT || prn > sdrini.nch) {
-            continue;
-        }
-
-        char sat_id[8] = {0};
-        snprintf(sat_id, sizeof(sat_id), "PRN%02d", prn);
-        if (prn >= 1 && prn <= sdrini.nch && sdrch[prn - 1].sat > 0) {
-            satno2id(sdrch[prn - 1].sat, sat_id);
-        }
-        const char *sat_label = sat_id;
-
-        if (sdrstat.obs_v[(prn - 1) * 11 + 8] < SNR_PVT_THRES) {
-            sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-            snprintf(buffer, sizeof(buffer),
-                     "%.3f  preCheckObs: %s has SNR:%.1f\n",
-                     sdrstat.elapsedTime, sat_label,
-                     sdrstat.obs_v[(prn - 1) * 11 + 8]);
-            add_message(buffer);
-            updateRequired = 1;
-        }
-
-        if (sdrstat.obs_v[(prn - 1) * 11 + 7] < GPS_WEEK) {
-            sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-            snprintf(buffer, sizeof(buffer),
-                     "%.3f  preCheckObs: %s has Week:%d\n",
-                     sdrstat.elapsedTime, sat_label,
-                     (int)sdrstat.obs_v[(prn - 1) * 11 + 7]);
-            add_message(buffer);
-            updateRequired = 1;
-        }
-
-        if (sdrstat.obs_v[(prn - 1) * 11 + 6] < 1.0) {
-            sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-            snprintf(buffer, sizeof(buffer),
-                     "%.3f  preCheckObs: %s has ToW:%.1f\n",
-                     sdrstat.elapsedTime, sat_label,
-                     sdrstat.obs_v[(prn - 1) * 11 + 6]);
-            add_message(buffer);
-            updateRequired = 1;
-        }
-
-        if (sdrstat.obs_v[(prn - 1) * 11 + 5] < LOW_PR) {
-            sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-            snprintf(buffer, sizeof(buffer),
-                     "%.3f  preCheckObs: %s has Low PR:%.1f\n",
-                     sdrstat.elapsedTime, sat_label,
-                     sdrstat.obs_v[(prn - 1) * 11 + 5]);
-            add_message(buffer);
-            updateRequired = 1;
-        }
-
-        if (sdrstat.obs_v[(prn - 1) * 11 + 5] > HIGH_PR) {
-            sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-            snprintf(buffer, sizeof(buffer),
-                     "%.3f  preCheckObs: %s has High PR:%.1f\n",
-                     sdrstat.elapsedTime, sat_label,
-                     sdrstat.obs_v[(prn - 1) * 11 + 5]);
-            add_message(buffer);
-            updateRequired = 1;
-        }
-
-        /* Check GPS/Galileo ephemeris */
-        if (prn >= 1 && prn <= sdrini.nch &&
-            (sdrch[prn - 1].nav.sdreph.ctype == CTYPE_L1CA || 
-             sdrch[prn - 1].nav.sdreph.ctype == CTYPE_E1B)) {
-            if ((sdrch[prn - 1].nav.sdreph.eph.toes < 1.0) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.A) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.e) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.M0) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.omg) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.i0) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.OMG0) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.deln) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.idot) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.OMGd) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.cuc) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.cus) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.crc) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.crs) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.cic) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.cis) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.f0) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.f1) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.eph.tgd[0]) < tol)) {
-
-                sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-                snprintf(
-                    buffer, sizeof(buffer),
-                    "%.3f  precheckEPH: %s tagged for removal for eph error\n",
-                    sdrstat.elapsedTime, sat_label);
-                add_message(buffer);
-                updateRequired = 1;
-            }
-        }
-        
-        /* Check GLONASS ephemeris */
-        if (sdrch[prn - 1].nav.sdreph.ctype == CTYPE_G1) {
-            if ((sdrch[prn - 1].nav.sdreph.geph.toe.time == 0) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.geph.pos[0]) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.geph.pos[1]) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.geph.pos[2]) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.geph.vel[0]) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.geph.vel[1]) < tol) ||
-                (fabs(sdrch[prn - 1].nav.sdreph.geph.vel[2]) < tol)) {
-
-                sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-                snprintf(
-                    buffer, sizeof(buffer),
-                    "%.3f  precheckEPH: R%02d tagged for removal for eph error\n",
-                    sdrstat.elapsedTime, prn);
-                add_message(buffer);
-                updateRequired = 1;
-            }
-        }
-
-        if (sdrstat.azElCalculatedflag) {
-            if (sdrstat.obs_v[(prn - 1) * 11 + 10] < SV_EL_PVT_MASK) {
-                sdrstat.obs_v[(prn - 1) * 11 + 1] = 0;
-                snprintf(buffer, sizeof(buffer),
-                         "%.3f  precheckObs: G%02d tagged for removal with el "
-                         "of %.1f\n",
-                         sdrstat.elapsedTime, prn,
-                         sdrstat.obs_v[(prn - 1) * 11 + 10]);
-                add_message(buffer);
-                updateRequired = 1;
-            }
-        }
-    }
-
-    unmlock(hobsvecmtx);
-
-    if (updateRequired) {
-        ret = updateObsList();
-        if (ret == -1) {
-            printf("updateObsList: error\n");
-        }
-    }
+extern int calculateLocalAngles(double X[], double dx[], double *Az, double *El,
+                                double *D) {
+    TopocentricCoord topo = {0, 0, 0};
+    int ret = ecefToTopocentric(X, dx, &topo);
+    *Az = topo.azimuth;
+    *El = topo.elevation;
+    *D = topo.range;
+    return ret;
 }
 
-extern int tropo(double sinel, double hsta, double p, double tkel, double hum,
-                 double hp, double htkel, double hhum, double *ddr) {
-
+extern int estimateAtmosphericDelay(double sinel, double hsta, double p,
+                                    double tkel, double hum, double hp,
+                                    double htkel, double hhum, double *ddr) {
     double a_e = 6378.137;
     double b0 = 7.839257e-5;
     double tlapse = -6.5;
@@ -776,217 +399,429 @@ extern int tropo(double sinel, double hsta, double p, double tkel, double hum,
     double e0sea = e0 * pow((tksea / tkelh), (4 * em));
     double tkelp = tksea + tlapse * hp;
     double psea = p * pow((tksea / tkelp), em);
-    double alpha[] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    double rn[] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-
-    if (sinel < 0) {
+    double alpha[8] = {0};
+    double rn[8] = {0};
+    if (sinel < 0)
         sinel = 0;
-    }
-
-    double tropo = 0;
+    double tropoVal = 0;
     int done = 0;
     double refsea = 77.624e-6 / tksea;
     double htop = 1.1385e-5 / refsea;
     refsea = refsea * psea;
     double ref = refsea * pow(((htop - hsta) / htop), 4);
-
     while (1) {
-        double rtop =
-            pow((a_e + htop), 2) - pow((a_e + hsta), 2) * (1 - pow(sinel, 2));
-
-        if (rtop < 0) {
-            rtop = 0;
-        }
-
-        rtop = sqrt(rtop) - (a_e + hsta) * sinel;
+        double rtop = SQ(a_e + htop) - SQ(a_e + hsta) * (1 - SQ(sinel));
+        rtop = (rtop < 0) ? 0 : sqrt(rtop) - (a_e + hsta) * sinel;
         double a = -sinel / (htop - hsta);
-        double b = -b0 * (1 - pow(sinel, 2)) / (htop - hsta);
-
-        for (int i = 0; i < 7; i++) {
-            rn[i] = pow(rtop, (i + 2));
-        }
-
+        double b = -b0 * (1 - SQ(sinel)) / (htop - hsta);
+        for (int i = 0; i < 7; i++)
+            rn[i] = pow(rtop, i + 2);
         alpha[0] = 2 * a;
-        alpha[1] = 2 * pow(a, 2) + 4 * b / 3;
-        alpha[2] = a * (pow(a, 2) + 3 * b);
-        alpha[3] = pow(a, 4) / 5 + 2.4 * pow(a, 2) * b + 1.2 * pow(b, 2);
-        alpha[4] = 2 * a * b * (pow(a, 2) + 3 * b) / 3;
-        alpha[5] = pow(b, 2) * (6 * pow(a, 2) + 4 * b) * 1.428571e-1;
-        alpha[6] = 0.0;
-        alpha[7] = 0.0;
-
-        if (pow(b, 2) > 1.0e-35) {
-            alpha[6] = a * pow(b, 3) / 2;
-            alpha[7] = pow(b, 4) / 9;
-        }
-
+        alpha[1] = 2 * SQ(a) + 4 * b / 3;
+        alpha[2] = a * (SQ(a) + 3 * b);
+        alpha[3] = SQ(a) * SQ(a) / 5 + 2.4 * SQ(a) * b + 1.2 * SQ(b);
+        alpha[4] = 2 * a * b * (SQ(a) + 3 * b) / 3;
+        alpha[5] = SQ(b) * (6 * SQ(a) + 4 * b) * 1.428571e-1;
+        alpha[6] = (SQ(b) > 1e-35) ? a * CUBE(b) / 2 : 0;
+        alpha[7] = (SQ(b) > 1e-35) ? SQ(b) * SQ(b) / 9 : 0;
         double dr = rtop;
-
-        for (int i = 0; i < 7; i++) {
-            dr = dr + alpha[i] * rn[i];
-        }
-
-        tropo = tropo + dr * ref * 1000;
-
-        if (done == 1) {
-            *ddr = tropo;
+        for (int i = 0; i < 7; i++)
+            dr += alpha[i] * rn[i];
+        tropoVal += dr * ref * 1000;
+        if (done) {
+            *ddr = tropoVal;
             break;
         }
-
         done = 1;
         refsea = (371900.0e-6 / tksea - 12.92e-6) / tksea;
         htop = 1.1385e-5 * (1255 / tksea + 0.05) / refsea;
         ref = refsea * e0sea * pow(((htop - hsta) / htop), 4);
     }
-
     return 0;
 }
 
-extern int togeod(double a, double finv, double X, double Y, double Z,
-                  double *dphi, double *dlambda, double *h) {
-
-    *h = 0;
-    double tolsq = 1.e-10;
-    double maxit = 50;
-    double esq = 0.0;
-    double sinphi = 0.0;
-
-    if (finv < 1.e-20) {
-        esq = 0;
-    } else {
-        esq = (2 - 1 / finv) / finv;
-    }
-
-    double oneesq = 1 - esq;
-
-    double P = sqrt(X * X + Y * Y);
-
-    if (P > 1.e-20) {
-        *dlambda = atan2(Y, X) * R2D;
-    } else {
-        *dlambda = 0;
-    }
-
-    if (*dlambda < 0) {
-        *dlambda = *dlambda + 360;
-    }
-
-    double r = sqrt(P * P + Z * Z);
-
-    if (r > 1.e-20) {
-        sinphi = Z / r;
-    } else {
-        sinphi = 0;
-    }
-
-    *dphi = asin(sinphi);
-
-    if (r < 1.e-20) {
-        *h = 0;
-        goto errorDetected;
-    }
-
-    *h = r - a * (1 - sinphi * sinphi / finv);
-
-    for (int i = 0; i < maxit; i++) {
-        double sinphi = sin(*dphi);
-        double cosphi = cos(*dphi);
-
-        double N_phi = a / sqrt(1 - esq * sinphi * sinphi);
-
-        double dP = P - (N_phi + *h) * cosphi;
-        double dZ = Z - (N_phi * oneesq + *h) * sinphi;
-
-        *h = *h + (sinphi * dZ + cosphi * dP);
-        *dphi = *dphi + (cosphi * dZ - sinphi * dP) / (N_phi + *h);
-
-        if (dP * dP + dZ * dZ < tolsq) {
-            break;
-        }
-
-        if (i == maxit) {
-            printf("Problem in TOGEOD, did not converge in %2d iterations\n",
-                   i);
-        }
-    }
-
-    *dphi = *dphi * R2D;
-
-    return 0;
-
-errorDetected:
-    printf("togeod--- errorDetected\n");
-    return -1;
-}
-
-extern int topocent(double X[], double dx[], double *Az, double *El,
-                    double *D) {
-
-    int ret;
-
-    double local_v[3] = {0};
-    double phi;
-    double lambda;
-    double h;
-
-    ret = togeod(6378137, 298.257223563, X[0], X[1], X[2], &phi, &lambda, &h);
-    if (ret != 0) {
-        printf("togeod function: error\n");
-    }
-
-    double cl = cos(lambda * D2R);
-    double sl = sin(lambda * D2R);
-    double cb = cos(phi * D2R);
-    double sb = sin(phi * D2R);
-
-    local_v[0] = -sl * dx[0] + cl * dx[1] + 0.0 * dx[2];
-    local_v[1] = -sb * cl * dx[0] - sb * sl * dx[1] + cb * dx[2];
-    local_v[2] = cb * cl * dx[0] + cb * sl * dx[1] + sb * dx[2];
-
-    double E = local_v[0];
-    double N = local_v[1];
-    double U = local_v[2];
-
-    double hor_dis = sqrt(E * E + N * N);
-
-    if (hor_dis < 1.e-20) {
-        *Az = 0.0;
-        *El = 90;
-    } else {
-        *Az = atan2(E, N) / D2R;
-        *El = atan2(U, hor_dis) / D2R;
-    }
-
-    if (*Az < 0) {
-        *Az = *Az + 360;
-    }
-
-    *D = sqrt(dx[0] * dx[0] + dx[1] * dx[1] + dx[2] * dx[2]);
-
-    return 0;
-}
-
-extern int updateObsList(void) {
-
+static void initWeightMatrix(int numSats, double *weights) {
+    double baseVariance = 25.0;
     mlock(hobsvecmtx);
-
-    sdrstat.nsatValid = 0;
-
-    for (int j = 0; j < MAXSAT; j++) {
-        sdrstat.obsValidList[j] = 0;
+    sdrekf.varR = baseVariance;
+    memset(sdrekf.rk1_v, 0, MAXSAT * sizeof(double));
+    for (int k = 0; k < numSats; k++) {
+        int prn = sdrstat.obsValidList[k];
+        if (prn < 1 || prn > MAXSAT)
+            continue;
+        sdrekf.rk1_v[prn - 1] = baseVariance;
+        double elev = sdrstat.obs_v[OBS_IDX(prn, 10)];
+        if (sdrstat.azElCalculatedflag && elev < 30.0) {
+            double elevFactor = 25.0 - (25.0 / 15.0) * (elev - 15.0);
+            sdrekf.rk1_v[prn - 1] = baseVariance + SQ(elevFactor);
+        }
+        weights[k + k * numSats] = 1.0 / sdrekf.rk1_v[prn - 1];
     }
+    unmlock(hobsvecmtx);
+}
 
-    for (int i = 0; i < MAXSAT; i++) {
-        if (sdrstat.obs_v[i * 11 + 1] == 1) {
-            int prn = (int)sdrstat.obs_v[i * 11 + 0];
-            if (prn >= 1 && prn <= MAXSAT && prn <= sdrini.nch &&
-                sdrstat.nsatValid < MAXSAT) {
-                sdrstat.obsValidList[sdrstat.nsatValid] = prn;
-                sdrstat.nsatValid = sdrstat.nsatValid + 1;
+static int solveWlsIteration(const double *satPos, const double *pr, int numSat,
+                             double *state, const double *weights, int iterNum,
+                             double *normDx, LsqMatrices *mat) {
+    double *designArr = (double *)calloc(numSat * STATE_DIM, sizeof(double));
+    double *omcArr = (double *)calloc(numSat, sizeof(double));
+    for (int i = 0; i < numSat; i++) {
+        double rotSat[3];
+        double trop = 2.0;
+        if (iterNum == 0) {
+            rotSat[0] = satPos[i * 3 + 0];
+            rotSat[1] = satPos[i * 3 + 1];
+            rotSat[2] = satPos[i * 3 + 2];
+        } else {
+            double dx = satPos[i * 3 + 0] - state[0];
+            double dy = satPos[i * 3 + 1] - state[1];
+            double dz = satPos[i * 3 + 2] - state[2];
+            double rho = sqrt(SQ(dx) + SQ(dy) + SQ(dz));
+            applyEarthRotation(&satPos[i * 3], rho / CTIME, rotSat);
+            double refPos[3] = {state[0], state[1], state[2]};
+            double delta[3] = {rotSat[0] - state[0], rotSat[1] - state[1],
+                               rotSat[2] - state[2]};
+            TopocentricCoord topo = {0, 0, 0};
+            ecefToTopocentric(refPos, delta, &topo);
+            sdrstat.azElCalculatedflag = 1;
+            mlock(hobsvecmtx);
+            int prn = sdrstat.obsValidList[i];
+            if (prn >= 1 && prn <= MAXSAT) {
+                sdrstat.obs_v[OBS_IDX(prn, 2)] = rotSat[0];
+                sdrstat.obs_v[OBS_IDX(prn, 3)] = rotSat[1];
+                sdrstat.obs_v[OBS_IDX(prn, 4)] = rotSat[2];
+                sdrstat.obs_v[OBS_IDX(prn, 9)] = topo.azimuth;
+                sdrstat.obs_v[OBS_IDX(prn, 10)] = topo.elevation;
             }
+            unmlock(hobsvecmtx);
+            estimateAtmosphericDelay(sin(topo.elevation * D2R), 0.0, 1013.0,
+                                     293.0, 50.0, 0.0, 0.0, 0.0, &trop);
+        }
+        double dx = rotSat[0] - state[0];
+        double dy = rotSat[1] - state[1];
+        double dz = rotSat[2] - state[2];
+        double range = sqrt(SQ(dx) + SQ(dy) + SQ(dz));
+        omcArr[i] = pr[i] - range - state[3] - trop;
+        designArr[i * 4 + 0] = -dx / range;
+        designArr[i * 4 + 1] = -dy / range;
+        designArr[i * 4 + 2] = -dz / range;
+        designArr[i * 4 + 3] = 1.0;
+    }
+    mat->weight =
+        nml_mat_from(numSat, numSat, numSat * numSat, (double *)weights);
+    mat->design =
+        nml_mat_from(numSat, STATE_DIM, numSat * STATE_DIM, designArr);
+    mat->designT = nml_mat_transp(mat->design);
+    mat->ata = nml_mat_dot(mat->designT, mat->design);
+    mat->atw = nml_mat_dot(mat->designT, mat->weight);
+    mat->atwa = nml_mat_dot(mat->atw, mat->design);
+    nml_mat_lup *lupAta = nml_mat_lup_solve(mat->ata);
+    nml_mat_lup *lupAtwa = nml_mat_lup_solve(mat->atwa);
+    double det = nml_mat_det(lupAta);
+    if (fabs(det) < DETERMINANT_TOL) {
+        printf("WLS solver abort: singular matrix (det=%lf)\n", det);
+        nml_mat_lup_free(lupAta);
+        nml_mat_lup_free(lupAtwa);
+        free(designArr);
+        free(omcArr);
+        return -1;
+    }
+    mat->invAta = nml_mat_inv(lupAta);
+    mat->invAtwa = nml_mat_inv(lupAtwa);
+    nml_mat_lup_free(lupAta);
+    nml_mat_lup_free(lupAtwa);
+    mat->gain1 = nml_mat_dot(mat->invAtwa, mat->designT);
+    mat->gain2 = nml_mat_dot(mat->gain1, mat->weight);
+    mat->residual = nml_mat_from(numSat, 1, numSat, omcArr);
+    mat->solution = nml_mat_dot(mat->gain2, mat->residual);
+    state[0] += mat->solution->data[0][0];
+    state[1] += mat->solution->data[1][0];
+    state[2] += mat->solution->data[2][0];
+    state[3] += mat->solution->data[3][0];
+    *normDx =
+        sqrt(SQ(mat->solution->data[0][0]) + SQ(mat->solution->data[1][0]) +
+             SQ(mat->solution->data[2][0]) + SQ(mat->solution->data[3][0]));
+    mlock(hobsvecmtx);
+    memset(sdrstat.vk1_v, 0, MAXSAT * sizeof(double));
+    for (int j = 0; j < numSat; j++) {
+        int prn = sdrstat.obsValidList[j];
+        if (prn >= 1 && prn <= MAXSAT) {
+            sdrstat.vk1_v[prn - 1] = omcArr[j];
         }
     }
     unmlock(hobsvecmtx);
+    free(designArr);
+    free(omcArr);
+    return 0;
+}
 
+extern int runWeightedLeastSquares(double *X_v, double *pr_v, int numSat,
+                                   double xyzdt_v[], double *gdop) {
+    numSat = sdrstat.nsatValid;
+    double *weightArr = (double *)calloc(numSat * numSat, sizeof(double));
+    initWeightMatrix(numSat, weightArr);
+    double state[STATE_DIM] = {(double)sdrini.xu0_v[0], (double)sdrini.xu0_v[1],
+                               (double)sdrini.xu0_v[2], 0.0};
+    LsqMatrices *matrices = initLsqMatrices(numSat);
+    if (!matrices) {
+        free(weightArr);
+        return -1;
+    }
+    double normDx = 100.0;
+    int status = 0;
+    for (int iter = 0; iter < MAX_ITER_POSITION && normDx > CONVERGENCE_TOL;
+         iter++) {
+        status = solveWlsIteration(X_v, pr_v, numSat, state, weightArr, iter,
+                                   &normDx, matrices);
+        if (status != 0)
+            break;
+    }
+    if (status == 0) {
+        xyzdt_v[0] = state[0];
+        xyzdt_v[1] = state[1];
+        xyzdt_v[2] = state[2];
+        xyzdt_v[3] = state[3];
+        *gdop =
+            sqrt(matrices->invAta->data[0][0] + matrices->invAta->data[1][1] +
+                 matrices->invAta->data[2][2] + matrices->invAta->data[3][3]);
+    } else {
+        memset(xyzdt_v, 0, STATE_DIM * sizeof(double));
+        *gdop = 0.0;
+    }
+    freeLsqMatrices(matrices);
+    free(weightArr);
+    return status;
+}
+
+static int validateEphemerisGps(int prn) {
+    double tol = 1e-15;
+    eph_t *e = &sdrch[prn - 1].nav.sdreph.eph;
+    return (e->toes >= 1.0) && (fabs(e->A) >= tol) && (fabs(e->e) >= tol) &&
+           (fabs(e->M0) >= tol) && (fabs(e->omg) >= tol) &&
+           (fabs(e->i0) >= tol) && (fabs(e->OMG0) >= tol) &&
+           (fabs(e->deln) >= tol) && (fabs(e->idot) >= tol) &&
+           (fabs(e->OMGd) >= tol) && (fabs(e->cuc) >= tol) &&
+           (fabs(e->cus) >= tol) && (fabs(e->crc) >= tol) &&
+           (fabs(e->crs) >= tol) && (fabs(e->cic) >= tol) &&
+           (fabs(e->cis) >= tol) && (fabs(e->f0) >= tol) &&
+           (fabs(e->f1) >= tol) && (fabs(e->tgd[0]) >= tol);
+}
+
+static int validateEphemerisGlo(int prn) {
+    double tol = 1e-15;
+    geph_t *g = &sdrch[prn - 1].nav.sdreph.geph;
+    return (g->toe.time != 0) && (fabs(g->pos[0]) >= tol) &&
+           (fabs(g->pos[1]) >= tol) && (fabs(g->pos[2]) >= tol) &&
+           (fabs(g->vel[0]) >= tol) && (fabs(g->vel[1]) >= tol) &&
+           (fabs(g->vel[2]) >= tol);
+}
+
+static void markSatelliteInvalid(int prn, const char *reason) {
+    char buffer[MSG_LENGTH];
+    char satId[8] = {0};
+    snprintf(satId, sizeof(satId), "PRN%02d", prn);
+    if (prn >= 1 && prn <= sdrini.nch && sdrch[prn - 1].sat > 0) {
+        satno2id(sdrch[prn - 1].sat, satId);
+    }
+    sdrstat.obs_v[OBS_IDX(prn, 1)] = 0;
+    snprintf(buffer, sizeof(buffer), "%.3f  validateMeas: %s %s\n",
+             sdrstat.elapsedTime, satId, reason);
+    add_message(buffer);
+}
+
+extern void validateMeasurements(void) {
+    int needUpdate = 0;
+    char reasonBuf[64];
+    mlock(hobsvecmtx);
+    for (int i = 0; i < sdrstat.nsatValid; i++) {
+        int prn = sdrstat.obsValidList[i];
+        if (prn < 1 || prn > MAXSAT || prn > sdrini.nch)
+            continue;
+        double snr = sdrstat.obs_v[OBS_IDX(prn, 8)];
+        double week = sdrstat.obs_v[OBS_IDX(prn, 7)];
+        double tow = sdrstat.obs_v[OBS_IDX(prn, 6)];
+        double pr = sdrstat.obs_v[OBS_IDX(prn, 5)];
+        double elev = sdrstat.obs_v[OBS_IDX(prn, 10)];
+        int ctype = sdrch[prn - 1].nav.sdreph.ctype;
+        if (snr < SNR_PVT_THRES) {
+            snprintf(reasonBuf, sizeof(reasonBuf), "has SNR:%.1f", snr);
+            markSatelliteInvalid(prn, reasonBuf);
+            needUpdate = 1;
+            continue;
+        }
+        if (week < GPS_WEEK) {
+            snprintf(reasonBuf, sizeof(reasonBuf), "has Week:%d", (int)week);
+            markSatelliteInvalid(prn, reasonBuf);
+            needUpdate = 1;
+            continue;
+        }
+        if (tow < 1.0) {
+            snprintf(reasonBuf, sizeof(reasonBuf), "has ToW:%.1f", tow);
+            markSatelliteInvalid(prn, reasonBuf);
+            needUpdate = 1;
+            continue;
+        }
+        if (pr < LOW_PR) {
+            snprintf(reasonBuf, sizeof(reasonBuf), "has Low PR:%.1f", pr);
+            markSatelliteInvalid(prn, reasonBuf);
+            needUpdate = 1;
+            continue;
+        }
+        if (pr > HIGH_PR) {
+            snprintf(reasonBuf, sizeof(reasonBuf), "has High PR:%.1f", pr);
+            markSatelliteInvalid(prn, reasonBuf);
+            needUpdate = 1;
+            continue;
+        }
+        if ((ctype == CTYPE_L1CA || ctype == CTYPE_E1B) &&
+            !validateEphemerisGps(prn)) {
+            markSatelliteInvalid(prn, "tagged for removal for eph error");
+            needUpdate = 1;
+            continue;
+        }
+        if (ctype == CTYPE_G1 && !validateEphemerisGlo(prn)) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "R%02d tagged for removal for eph error",
+                     prn);
+            sdrstat.obs_v[OBS_IDX(prn, 1)] = 0;
+            char msg[MSG_LENGTH];
+            snprintf(msg, sizeof(msg), "%.3f  ephValidation: %s\n",
+                     sdrstat.elapsedTime, buf);
+            add_message(msg);
+            needUpdate = 1;
+            continue;
+        }
+        if (sdrstat.azElCalculatedflag && elev < SV_EL_PVT_MASK) {
+            snprintf(reasonBuf, sizeof(reasonBuf),
+                     "tagged for removal with el of %.1f", elev);
+            markSatelliteInvalid(prn, reasonBuf);
+            needUpdate = 1;
+        }
+    }
+    unmlock(hobsvecmtx);
+    if (needUpdate) {
+        if (refreshValidSatellites() != 0) {
+            printf("refreshValidSatellites: error\n");
+        }
+    }
+}
+
+extern int refreshValidSatellites(void) {
+    mlock(hobsvecmtx);
+    sdrstat.nsatValid = 0;
+    memset(sdrstat.obsValidList, 0, MAXSAT * sizeof(int));
+    for (int i = 0; i < MAXSAT; i++) {
+        if (sdrstat.obs_v[OBS_IDX(i + 1, 1)] != 1.0)
+            continue;
+        int prn = (int)sdrstat.obs_v[OBS_IDX(i + 1, 0)];
+        if (prn >= 1 && prn <= MAXSAT && prn <= sdrini.nch &&
+            sdrstat.nsatValid < MAXSAT) {
+            sdrstat.obsValidList[sdrstat.nsatValid++] = prn;
+        }
+    }
+    unmlock(hobsvecmtx);
+    return 0;
+}
+
+static int computeSatellitePositions(PvtBuffers *buf, int numSat,
+                                     double rcvrTow) {
+    SatelliteData satData;
+    for (int i = 0; i < numSat; i++) {
+        mlock(hobsvecmtx);
+        double prEstimate = buf->rawPr[i] - sdrstat.xyzdt[3];
+        unmlock(hobsvecmtx);
+        double tau = prEstimate / CTIME;
+        double txTime = rcvrTow - tau;
+        mlock(hobsvecmtx);
+        int prn = sdrstat.obsValidList[i];
+        sdreph_t *eph = &sdrch[prn - 1].nav.sdreph;
+        unmlock(hobsvecmtx);
+        int ret;
+        if (eph->ctype == CTYPE_G1) {
+            ret = computeGlonassPosition(&eph->geph, txTime, &satData);
+        } else {
+            ret = computeKeplerianPosition(&eph->eph, txTime, &satData);
+        }
+        if (ret != 0 || isnan(satData.pos[0])) {
+            printf("SV coordinate computation failed (NaN) for G%02d\n", prn);
+            return -1;
+        }
+        buf->corrPr[i] = buf->rawPr[i] + CTIME * satData.clkCorr;
+        buf->satPositions[i * 3 + 0] = satData.pos[0];
+        buf->satPositions[i * 3 + 1] = satData.pos[1];
+        buf->satPositions[i * 3 + 2] = satData.pos[2];
+        mlock(hobsvecmtx);
+        sdrstat.obs_v[OBS_IDX(prn, 2)] = satData.pos[0];
+        sdrstat.obs_v[OBS_IDX(prn, 3)] = satData.pos[1];
+        sdrstat.obs_v[OBS_IDX(prn, 4)] = satData.pos[2];
+        unmlock(hobsvecmtx);
+    }
+    return 0;
+}
+
+static void storePositionResult(double x, double y, double z, double clkBias,
+                                double gdop) {
+    GeodeticCoord geo;
+    double ecef[3] = {x, y, z};
+    ecefToGeodetic(ecef, &geo);
+    mlock(hobsvecmtx);
+    sdrstat.lat = geo.lat * 180.0 / M_PI;
+    sdrstat.lon = geo.lon * 180.0 / M_PI;
+    sdrstat.hgt = geo.alt;
+    sdrstat.gdop = gdop;
+    sdrstat.xyzdt[0] = x;
+    sdrstat.xyzdt[1] = y;
+    sdrstat.xyzdt[2] = z;
+    sdrstat.xyzdt[3] = clkBias;
+    unmlock(hobsvecmtx);
+}
+
+static void clearPositionResult(void) {
+    mlock(hobsvecmtx);
+    sdrstat.lat = 0.0;
+    sdrstat.lon = 0.0;
+    sdrstat.hgt = 0.0;
+    sdrstat.gdop = 0.0;
+    unmlock(hobsvecmtx);
+}
+
+extern int executeNavigationSolution(void) {
+    mlock(hobsvecmtx);
+    int numSat = sdrstat.nsatValid;
+    unmlock(hobsvecmtx);
+    PvtBuffers *buf = allocatePvtBuffers(numSat);
+    if (!buf)
+        return -1;
+    mlock(hobsvecmtx);
+    for (int i = 0; i < numSat; i++) {
+        int prn = sdrstat.obsValidList[i];
+        buf->rawPr[i] = sdrstat.obs_v[OBS_IDX(prn, 5)];
+        buf->rcvrTow[i] = sdrstat.obs_v[OBS_IDX(prn, 6)];
+        buf->snr[i] = sdrstat.obs_v[OBS_IDX(prn, 8)];
+    }
+    unmlock(hobsvecmtx);
+    double rcvrTow = buf->rcvrTow[0];
+    if (computeSatellitePositions(buf, numSat, rcvrTow) != 0) {
+        clearPositionResult();
+        freePvtBuffers(buf);
+        return -1;
+    }
+    if (sdrstat.nsatValid < 4) {
+        clearPositionResult();
+        freePvtBuffers(buf);
+        return -1;
+    }
+    double state[STATE_DIM] = {0};
+    double gdop = 0.0;
+    int ret = runWeightedLeastSquares(buf->satPositions, buf->corrPr, numSat,
+                                      state, &gdop);
+    if (ret != 0 || isnan(state[0]) || isnan(state[1]) || isnan(state[2])) {
+        printf("Navigation solution diverged (NaN in receiver position)\n");
+        clearPositionResult();
+        freePvtBuffers(buf);
+        return -1;
+    }
+    storePositionResult(state[0], state[1], state[2], state[3], gdop);
+    freePvtBuffers(buf);
     return 0;
 }

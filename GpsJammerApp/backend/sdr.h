@@ -174,7 +174,6 @@ typedef struct {
     double trkpllb[2];
     double trkfllb[2];
     int rtlsdrppmerr;
-    int ekfFilterOn;
 } sdrini_t;
 
 typedef struct {
@@ -196,7 +195,10 @@ typedef struct {
     int nsatValid;
     int satList[MAXSAT];
     int obsValidList[MAXSAT];
-    double obs_v[11 * MAXSAT];
+    double obs_v[14 * MAXSAT];  /* Extended from 11 to 14 elements for spoofing detection:
+                                    [0]=PRN, [1]=valid, [2-4]=sat_pos_XYZ, [5]=P, [6]=tow, 
+                                    [7]=week, [8]=SNR, [9]=az, [10]=el, [11]=carrier_phase, 
+                                    [12]=doppler, [13]=codei_diff_to_ref (samples) */
     double vk1_v[MAXSAT];
     double clkBias;
     double xyzdt[4];
@@ -486,22 +488,22 @@ extern void correlator(const char *data, int dtype, double ti, int n,
 extern int leap_seconds(long gps_seconds);
 extern time_t gps_to_utc(int gps_week, double gps_tow);
 extern short *gencode(int prn, int ctype, int *len, double *crate);
-extern int pvtProcessor(void);
-extern int blsFilter(double *xs_v, double *pr_v, int numSat, double xyzdt_v[],
-                     double *gdop);
-extern void ecef2lla(double x, double y, double z, double *latitude,
-                     double *longitude, double *height);
-extern void check_t(double time, double *corrTime);
-extern int satPos(sdreph_t *sdreph, double transmitTime, double svPos[3],
-                  double *svClkCorr);
-extern void rot(double R[9], double angle, int axis);
-extern void precheckObs();
-extern int tropo(double sinel, double hsta, double p, double tkel, double hum,
-                 double hp, double htkel, double hhum, double *ddr);
-extern int togeod(double a, double finv, double X, double Y, double Z,
-                  double *dphi, double *dlambda, double *h);
-extern int topocent(double X[], double dx[], double *Az, double *El, double *D);
-extern int updateObsList(void);
+extern int executeNavigationSolution(void);
+extern int runWeightedLeastSquares(double *xs_v, double *pr_v, int numSat, double xyzdt_v[],
+                                   double *gdop);
+extern void cartesianToGeodetic(double x, double y, double z, double *latitude,
+                                double *longitude, double *height);
+extern void normalizeGpsTime(double time, double *corrTime);
+extern int computeSvCoordinates(sdreph_t *sdreph, double transmitTime, double svPos[3],
+                                double *svClkCorr);
+extern void buildAxisRotation(double R[9], double angle, int axis);
+extern void validateMeasurements(void);
+extern int estimateAtmosphericDelay(double sinel, double hsta, double p, double tkel, double hum,
+                                    double hp, double htkel, double hhum, double *ddr);
+extern int xyz2GeodeticDeg(double a, double finv, double X, double Y, double Z,
+                           double *dphi, double *dlambda, double *h);
+extern int calculateLocalAngles(double X[], double dx[], double *Az, double *El, double *D);
+extern int refreshValidSatellites(void);
 extern void sdrnavigation(sdrch_t *sdr, uint64_t buffloc, uint64_t cnt);
 extern uint32_t getbitu2(const uint8_t *buff, int p1, int l1, int p2, int l2);
 extern int32_t getbits2(const uint8_t *buff, int p1, int l1, int p2, int l2);

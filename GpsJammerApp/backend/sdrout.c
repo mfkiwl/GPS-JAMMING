@@ -3,36 +3,29 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
 #define HTTP_HOST "127.0.0.1"
 #define HTTP_PORT 1234
-
 static int send_json_http(const char *json_data) {
     int sock;
     struct sockaddr_in server;
     char request[8192];
     int json_len = strlen(json_data);
-
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == -1) {
         return -1;
     }
-
     struct timeval timeout;
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
     server.sin_family = AF_INET;
     server.sin_port = htons(HTTP_PORT);
     server.sin_addr.s_addr = inet_addr(HTTP_HOST);
-
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
         close(sock);
         return -1;
     }
-
     snprintf(request, sizeof(request),
              "POST /data HTTP/1.1\r\n"
              "Host: %s:%d\r\n"
@@ -42,16 +35,12 @@ static int send_json_http(const char *json_data) {
              "\r\n"
              "%s",
              HTTP_HOST, HTTP_PORT, json_len, json_data);
-
     if (send(sock, request, strlen(request), 0) < 0) {
         close(sock);
         return -1;
     }
-
-    // Odczytaj odpowiedź (żeby uniknąć BrokenPipe po stronie serwera)
     char response[256];
     recv(sock, response, sizeof(response) - 1, 0);
-
     close(sock);
     return 0;
 }
@@ -81,7 +70,6 @@ extern void add_message(const char *msg) {
 }
 
 extern void updateNavStatusWin(int counter) {
-
     int prn[MAXSAT] = {0};
     int flagacq[MAXSAT] = {0};
     int flagsync[MAXSAT] = {0};
@@ -92,7 +80,7 @@ extern void updateNavStatusWin(int counter) {
     double hgt = 0.0;
     double gdop = 0.0;
     double clkBias = 0.0;
-    double obs_v[MAXSAT * 11] = {0.0};
+    double obs_v[MAXSAT * 14] = {0.0};
     double vk1_v[MAXSAT] = {0.0};
     double rk1_v[MAXSAT] = {0.0};
     int gps_week = 0;
@@ -101,11 +89,9 @@ extern void updateNavStatusWin(int counter) {
     char str1[10];
     char json_buffer[16384];
     int json_pos = 0;
-
     mlock(hobsvecmtx);
     int used_ch = sdrini.nch < MAXSAT ? sdrini.nch : MAXSAT;
     for (int i = 0; i < used_ch; i++) {
-        /* For GLONASS, display frequency number instead of channel index */
         if (sdrch[i].sys == SYS_GLO) {
             prn[i] = sdrch[i].nav.sdreph.geph.frq;
         } else {
@@ -116,6 +102,9 @@ extern void updateNavStatusWin(int counter) {
         flagdec[i] = sdrch[i].nav.flagdec;
     }
     nsat = sdrstat.nsatValid;
+    int obsValidList_local[MAXSAT];
+    memcpy(obsValidList_local, sdrstat.obsValidList,
+           sizeof(obsValidList_local));
     lat = sdrstat.lat;
     lon = sdrstat.lon;
     hgt = sdrstat.hgt;
@@ -125,36 +114,29 @@ extern void updateNavStatusWin(int counter) {
     memcpy(vk1_v, sdrstat.vk1_v, sizeof(vk1_v));
     memcpy(rk1_v, sdrekf.rk1_v, sizeof(rk1_v));
     if (nsat > 0) {
-        int ref_prn = sdrstat.obsValidList[0];
+        int ref_prn = obsValidList_local[0];
         if (ref_prn >= 1 && ref_prn <= MAXSAT) {
-            gps_tow = sdrstat.obs_v[(ref_prn - 1) * 11 + 6];
-            gps_week = (int)sdrstat.obs_v[(ref_prn - 1) * 11 + 7];
+            gps_tow = sdrstat.obs_v[(ref_prn - 1) * 14 + 6];
+            gps_week = (int)sdrstat.obs_v[(ref_prn - 1) * 14 + 7];
         }
     }
     unmlock(hobsvecmtx);
-
     if (nsat == 0) {
         gps_tow = 0.0;
         gps_week = 0;
     }
-
     static int hold_valid = 0;
     static double hold_lat = 0.0, hold_lon = 0.0, hold_hgt = 0.0;
-    static double hold_time = 0.0;
     const int MIN_VALID_NSAT = 4;
     const double MAX_DEG_DIFF = 1.0;
-    double current_time = sdrstat.elapsedTime;
-    int position_finite =
-        isfinite(lat) && isfinite(lon) && isfinite(hgt);
+    int position_finite = isfinite(lat) && isfinite(lon) && isfinite(hgt);
     int fix_valid = (nsat >= MIN_VALID_NSAT) && position_finite;
-
     int hold_applied = 0;
     if (hold_enabled) {
         if (fix_valid && !hold_valid) {
             hold_lat = lat;
             hold_lon = lon;
             hold_hgt = hgt;
-            hold_time = current_time;
             hold_valid = 1;
         } else if (fix_valid && hold_valid) {
             double dlat_deg = fabs(lat - hold_lat);
@@ -165,7 +147,6 @@ extern void updateNavStatusWin(int counter) {
                 hold_lat = lat;
                 hold_lon = lon;
                 hold_hgt = hgt;
-                hold_time = current_time;
             } else {
                 lat = hold_lat;
                 lon = hold_lon;
@@ -181,7 +162,6 @@ extern void updateNavStatusWin(int counter) {
     } else {
         hold_valid = 0;
     }
-
     if (!isfinite(lat) || !isfinite(lon)) {
         lat = 0.0;
         lon = 0.0;
@@ -189,19 +169,18 @@ extern void updateNavStatusWin(int counter) {
     if (!isfinite(hgt)) {
         hgt = 0.0;
     }
-
-    #define JSON_APPEND(fmt, ...)                                                          \
-    do {                                                                                  \
-        int _n = snprintf(json_buffer + json_pos,                                          \
-                           sizeof(json_buffer) - json_pos, fmt, ##__VA_ARGS__);           \
-        if (_n < 0) _n = 0;                                                               \
-        if ((size_t)_n >= sizeof(json_buffer) - json_pos) {                                \
-            json_pos = sizeof(json_buffer) - 1;                                           \
-        } else {                                                                          \
-            json_pos += _n;                                                               \
-        }                                                                                 \
+#define JSON_APPEND(fmt, ...)                                                  \
+    do {                                                                       \
+        int _n = snprintf(json_buffer + json_pos,                              \
+                          sizeof(json_buffer) - json_pos, fmt, ##__VA_ARGS__); \
+        if (_n < 0)                                                            \
+            _n = 0;                                                            \
+        if ((size_t)_n >= sizeof(json_buffer) - json_pos) {                    \
+            json_pos = sizeof(json_buffer) - 1;                                \
+        } else {                                                               \
+            json_pos += _n;                                                    \
+        }                                                                      \
     } while (0)
-
     time_t utc_time_seconds = gps_to_utc(gps_week, gps_tow + clkBias / CTIME);
     struct tm utc_tm;
     gmtime_r(&utc_time_seconds, &utc_tm);
@@ -209,23 +188,14 @@ extern void updateNavStatusWin(int counter) {
             utc_tm.tm_year + 1900, utc_tm.tm_mon + 1, utc_tm.tm_mday,
             utc_tm.tm_hour, utc_tm.tm_min, utc_tm.tm_sec,
             (int)(gps_tow * 1000) % 1000);
-
     json_pos = 0;
     JSON_APPEND("{");
     JSON_APPEND("\"elapsed_time\":%.3f,", sdrstat.elapsedTime);
     JSON_APPEND("\"time\":\"%s\",", bufferNav);
-
     printf("ETIME|%.3f\n", sdrstat.elapsedTime);
     printf("TIME|%s\n", bufferNav);
-
-    if (sdrini.ekfFilterOn) {
-        JSON_APPEND("\"filter\":\"EKF\",");
-        printf("FILTER|EKF\n");
-    } else {
-        JSON_APPEND("\"filter\":\"WLS\",");
-        printf("FILTER|WLS\n");
-    }
-
+    JSON_APPEND("\"filter\":\"WLS\",");
+    printf("FILTER|WLS\n");
     bufferNav[0] = '\0';
     JSON_APPEND("\"acq_sv\":[");
     int first_acq = 1;
@@ -242,7 +212,6 @@ extern void updateNavStatusWin(int counter) {
     }
     JSON_APPEND("],");
     printf("ACQSV|%s\n", bufferNav);
-
     bufferNav[0] = '\0';
     JSON_APPEND("\"tracked\":[");
     int first_tracked = 1;
@@ -259,7 +228,6 @@ extern void updateNavStatusWin(int counter) {
     }
     JSON_APPEND("],");
     printf("TRACKED|%s\n", bufferNav);
-
     bufferNav[0] = '\0';
     JSON_APPEND("\"decoded\":[");
     int first_decoded = 1;
@@ -276,59 +244,53 @@ extern void updateNavStatusWin(int counter) {
     }
     JSON_APPEND("],");
     printf("DECODED|%s\n", bufferNav);
-
     sprintf(bufferNav, "%.7f|%.7f|%.1f|%.2f|%.5e|%llu", lat, lon, hgt, gdop,
             clkBias / CTIME,
             (unsigned long long)sdrstat.buffcnt * FILE_BUFFSIZE);
-
-    JSON_APPEND("\"position\":{\"nsat\":%d,\"lat\":%.7f,\"lon\":%.7f,\"hgt\":%"
-                 ".1f,\"gdop\":%.2f,\"clk_bias\":%.5e,\"buffcnt\":%llu,\"hold\":%s},",
-                 nsat, lat, lon, hgt, gdop, clkBias / CTIME,
-                 (unsigned long long)sdrstat.buffcnt * FILE_BUFFSIZE,
-                 hold_applied ? "true" : "false");
-
+    JSON_APPEND(
+        "\"position\":{\"nsat\":%d,\"lat\":%.7f,\"lon\":%.7f,\"hgt\":%"
+        ".1f,\"gdop\":%.2f,\"clk_bias\":%.5e,\"buffcnt\":%llu,\"hold\":%s},",
+        nsat, lat, lon, hgt, gdop, clkBias / CTIME,
+        (unsigned long long)sdrstat.buffcnt * FILE_BUFFSIZE,
+        hold_applied ? "true" : "false");
     printf("LLA|%02d|%s\n", nsat, bufferNav);
-
     JSON_APPEND("\"observations\":[");
     for (int i = 0; i < nsat; i++) {
-        int prn_val = sdrstat.obsValidList[i];
+        int prn_val = obsValidList_local[i];
         if (prn_val < 1 || prn_val > MAXSAT) {
             continue;
         }
         sprintf(bufferNav, "%02d|%.1f|%d|%.1f|%.1f|%05.1f|%04.1f|%05.1f|%7.1f",
-                (int)obs_v[(prn_val - 1) * 11 + 0],
-                obs_v[(prn_val - 1) * 11 + 6],
-                (int)obs_v[(prn_val - 1) * 11 + 7],
-                obs_v[(prn_val - 1) * 11 + 8],
-                obs_v[(prn_val - 1) * 11 + 5],
-                obs_v[(prn_val - 1) * 11 + 9],
-                obs_v[(prn_val - 1) * 11 + 10], rk1_v[(prn_val - 1)],
-                vk1_v[(prn_val - 1)]);
-
+                (int)obs_v[(prn_val - 1) * 14 + 0],
+                obs_v[(prn_val - 1) * 14 + 6],
+                (int)obs_v[(prn_val - 1) * 14 + 7],
+                obs_v[(prn_val - 1) * 14 + 8], obs_v[(prn_val - 1) * 14 + 5],
+                obs_v[(prn_val - 1) * 14 + 9], obs_v[(prn_val - 1) * 14 + 10],
+                rk1_v[(prn_val - 1)], vk1_v[(prn_val - 1)]);
         if (i > 0) {
             JSON_APPEND(",");
         }
         JSON_APPEND(
-            "{\"prn\":%d,\"tow\":%.1f,\"week\":%d,\"snr\":%.1f,\"doppler\":%"
-            ".1f,\"az\":%.1f,\"el\":%.1f,\"residual\":%.1f,\"innovation\":%.1f}",
-            (int)obs_v[(prn_val - 1) * 11 + 0],
-            obs_v[(prn_val - 1) * 11 + 6],
-            (int)obs_v[(prn_val - 1) * 11 + 7],
-            obs_v[(prn_val - 1) * 11 + 8],
-            obs_v[(prn_val - 1) * 11 + 5],
-            obs_v[(prn_val - 1) * 11 + 9],
-            obs_v[(prn_val - 1) * 11 + 10], rk1_v[(prn_val - 1)],
+            "{\"prn\":%d,\"tow\":%.1f,\"week\":%d,\"snr\":%.1f,"
+            "\"pseudorange\":%.1f,\"az\":%.1f,\"el\":%.1f,"
+            "\"sat_pos\":[%.3f,%.3f,%.3f],"
+            "\"carrier_phase\":%.6f,\"doppler_freq\":%.1f,"
+            "\"codei_diff\":%.1f,"
+            "\"residual\":%.1f,\"innovation\":%.1f}",
+            (int)obs_v[(prn_val - 1) * 14 + 0], obs_v[(prn_val - 1) * 14 + 6],
+            (int)obs_v[(prn_val - 1) * 14 + 7], obs_v[(prn_val - 1) * 14 + 8],
+            obs_v[(prn_val - 1) * 14 + 5], obs_v[(prn_val - 1) * 14 + 9],
+            obs_v[(prn_val - 1) * 14 + 10], obs_v[(prn_val - 1) * 14 + 2],
+            obs_v[(prn_val - 1) * 14 + 3], obs_v[(prn_val - 1) * 14 + 4],
+            obs_v[(prn_val - 1) * 14 + 11], obs_v[(prn_val - 1) * 14 + 12],
+            obs_v[(prn_val - 1) * 14 + 13], rk1_v[(prn_val - 1)],
             vk1_v[(prn_val - 1)]);
-
         printf("OBS|%s\n", bufferNav);
     }
     JSON_APPEND("]}");
-
     if (json_pos >= (int)sizeof(json_buffer)) {
         json_buffer[sizeof(json_buffer) - 1] = '\0';
     }
-
     send_json_http(json_buffer);
-
 #undef JSON_APPEND
 }
