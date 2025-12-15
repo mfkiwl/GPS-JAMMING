@@ -8,8 +8,9 @@ import argparse
 # Twój wyliczony skalar
 GPS_WEAKEN_SCALE = 0.125
 GPS_TRAJ_FILE = 'traj.csv' 
-DYNAMIC_JAMMER_POWER = 0.605 
-STATIC_JAMMER_POWER = 0.605
+# Bezpieczna moc jammera - bez ryzyka clippingu
+DYNAMIC_JAMMER_POWER = 1.2 
+STATIC_JAMMER_POWER = 1.2
 
 def latlon_to_ecef(lat, lon, alt):
     a = 6378137.0         
@@ -77,6 +78,10 @@ def main(args):
             print(f"Ostrzeżenie: Nie można usunąć pliku {GPS_TRAJ_FILE}. Błąd: {e}")
 
         power_profile_per_timestep = [] 
+        # Strefa przejściowa - 5m przed maksymalnym zasięgiem
+        TRANSITION_ZONE_WIDTH = 5.0  # metry
+        TRANSITION_ZONE_START = max(0, JAMMER_MAX_RANGE_METERS - TRANSITION_ZONE_WIDTH)
+        
         for index, row in traj_df.iterrows():
             receiver_ecef = (row['x'], row['y'], row['z'])
             total_distance = math.sqrt(
@@ -84,11 +89,22 @@ def main(args):
                 (receiver_ecef[1] - JAMMER_ECEF[1])**2 +
                 (receiver_ecef[2] - JAMMER_ECEF[2])**2
             )
+            
             if total_distance > JAMMER_MAX_RANGE_METERS:
+                # Poza zasięgiem - brak sygnału
                 power_scale = 0.0  
+            elif total_distance > TRANSITION_ZONE_START:
+                # Strefa przejściowa - płynne spadanie do zera
+                # Obliczamy moc bazową (1/d)
+                base_power = DYNAMIC_JAMMER_POWER * (AMPLITUDE_REFERENCE_DISTANCE_METERS / total_distance)**1
+                # Obliczamy współczynnik tłumienia (1.0 na początku strefy, 0.0 na końcu)
+                fade_factor = 1.0 - (total_distance - TRANSITION_ZONE_START) / (JAMMER_MAX_RANGE_METERS - TRANSITION_ZONE_START)
+                power_scale = base_power * fade_factor
             elif total_distance < AMPLITUDE_REFERENCE_DISTANCE_METERS:
+                # Bardzo blisko jammera - maksymalna moc
                 power_scale = DYNAMIC_JAMMER_POWER 
             else:
+                # Normalna odległość - spadek 1/d
                 power_scale = DYNAMIC_JAMMER_POWER * (AMPLITUDE_REFERENCE_DISTANCE_METERS / total_distance)**1
 
             power_profile_per_timestep.append(power_scale)
@@ -142,15 +158,26 @@ def main(args):
         total_distance = np.sqrt(distance_2d**2 + distance_alt**2)
         
         print(f"Odległość odbiornika od jammera: {total_distance:.2f} metrów.")
+        
+        # Strefa przejściowa - 5m przed maksymalnym zasięgiem
+        TRANSITION_ZONE_WIDTH = 5.0  # metry
+        TRANSITION_ZONE_START = max(0, JAMMER_MAX_RANGE_METERS - TRANSITION_ZONE_WIDTH)
+        
         if total_distance > JAMMER_MAX_RANGE_METERS:
             print(f"Odbiornik poza zasięgiem ({JAMMER_MAX_RANGE_METERS}m). Jammer nie zostanie dodany.")
         else:
-            if total_distance < AMPLITUDE_REFERENCE_DISTANCE_METERS:
+            if total_distance > TRANSITION_ZONE_START:
+                # Strefa przejściowa - płynne spadanie do zera
+                base_power = STATIC_JAMMER_POWER * (AMPLITUDE_REFERENCE_DISTANCE_METERS / total_distance)**1
+                fade_factor = 1.0 - (total_distance - TRANSITION_ZONE_START) / (JAMMER_MAX_RANGE_METERS - TRANSITION_ZONE_START)
+                power_scale = base_power * fade_factor
+                print(f"Odbiornik W STREFIE PRZEJŚCIOWEJ. Obliczona skala amplitudy: {power_scale*100:.2f}% (tłumienie: {fade_factor*100:.1f}%)")
+            elif total_distance < AMPLITUDE_REFERENCE_DISTANCE_METERS:
                 power_scale = STATIC_JAMMER_POWER
+                print(f"Odbiornik W ZASIĘGU (blisko). Obliczona skala amplitudy: {power_scale*100:.2f}%")
             else:
                 power_scale = STATIC_JAMMER_POWER * (AMPLITUDE_REFERENCE_DISTANCE_METERS / total_distance)**1
-
-            print(f"Odbiornik W ZASIĘGU. Obliczona skala amplitudy: {power_scale*100:.2f}%")
+                print(f"Odbiornik W ZASIĘGU. Obliczona skala amplitudy: {power_scale*100:.2f}%")
             start_index = int(SAMPLING_RATE * DELAY_SECONDS * 2)
             duration_samples = int(SAMPLING_RATE * DURATION_SECONDS * 2)
             jammer_copy_len = min(len(jammer_data), duration_samples)

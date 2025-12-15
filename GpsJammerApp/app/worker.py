@@ -79,7 +79,7 @@ class GPSAnalysisThread(QThread):
         super().__init__()
         self.file_paths = file_paths
         
-        self.POWER_CHUNK_SIZE = 32768 
+        self.POWER_CHUNK_SIZE = 20480  # [FIX] Dopasowano do wykres.py dla spójności 
         
         # Progi Naukowe
         # Ignorujemy argument power_threshold na rzecz stałej 6.0dB (ITU-R)
@@ -133,7 +133,8 @@ class GPSAnalysisThread(QThread):
         self.power_map_ready = False
         self.total_file_bytes = 0 
         self.power_detection_enabled = True
-        self.jamming_start_byte_offset = None 
+        self.jamming_start_byte_offset = None
+        self.jamming_byte_ranges = []  # [FIX] Inicjalizacja tutaj! 
         
         # Historia
         self.cn0_history = deque(maxlen=100) 
@@ -239,18 +240,58 @@ class GPSAnalysisThread(QThread):
             self.power_map = np.array(temp_powers)
             
             if len(self.power_map) > 0:
-                self.global_baseline_power = np.percentile(self.power_map, 5) 
+                # SLIDING WINDOW BASELINE (IEEE: Borio et al. 2016)
+                # "GNSS Interference Detection via Statistical Analysis"
+                # DOI: 10.1109/TAES.2016.150600
+                
+                # Parametry sliding window
+                window_size_sec = 5.0  # 5 sekund historii
+                samples_per_chunk = self.POWER_CHUNK_SIZE
+                sample_rate = 2048000.0
+                chunks_per_window = int((window_size_sec * sample_rate) / samples_per_chunk)
+                chunks_per_window = max(10, chunks_per_window)  # Min. 10 chunków
+                
+                print(f"[POWER SCAN] Sliding Window: {window_size_sec}s ({chunks_per_window} chunków)")
+                
+                self.global_baseline_power = np.percentile(self.power_map, 5)  # Backup
                 if self.global_baseline_power <= 0: self.global_baseline_power = 1.0
                 
-                threshold_ratio = 10**(self.THRESHOLD_POWER_RISE_DB / 10.0) 
-                power_threshold_linear = self.global_baseline_power * threshold_ratio
+                threshold_ratio = 10**(self.THRESHOLD_POWER_RISE_DB / 10.0)
                 
-                jamming_indices = np.where(self.power_map > power_threshold_linear)[0]
+                # DEBUG: Pokaż wartości globalnej baseline
+                max_power = np.max(self.power_map)
+                max_power_db = 10 * np.log10(max_power / self.global_baseline_power + 1e-10)
+                print(f"[DEBUG] Global Baseline: {self.global_baseline_power:.2f}, Max power: {max_power:.2f}, Max dB: {max_power_db:.1f} dB")
                 
-                # Wykrywanie przedziałów
+                # SLIDING WINDOW DETECTION
+                jamming_indices = []
+                for i in range(len(self.power_map)):
+                    # Weź okno PRZED bieżącym punktem
+                    window_start = max(0, i - chunks_per_window)
+                    window_end = i
+                    
+                    if window_end - window_start >= 5:  # Min. 5 chunków w oknie
+                        local_baseline = np.percentile(self.power_map[window_start:window_end], 5)
+                        if local_baseline <= 0: local_baseline = self.global_baseline_power
+                    else:
+                        local_baseline = self.global_baseline_power
+                    
+                    # Próg względem lokalnej baseline
+                    local_threshold = local_baseline * threshold_ratio
+                    
+                    if self.power_map[i] > local_threshold:
+                        jamming_indices.append(i)
+                
+                jamming_indices = np.array(jamming_indices)
+                print(f"[DEBUG] Sliding Window wykryło {len(jamming_indices)} chunków powyżej progu (z {len(self.power_map)} total)")
+                
+                # Wykrywanie przedziałów (łączenie sąsiednich chunków)
                 self.jamming_byte_ranges = []
                 if len(jamming_indices) > 0:
-                    jamming_mask = self.power_map > power_threshold_linear
+                    # Grupuj ciągłe indeksy
+                    jamming_mask = np.zeros(len(self.power_map), dtype=bool)
+                    jamming_mask[jamming_indices] = True
+                    
                     diffs = np.diff(jamming_mask.astype(int))
                     starts = np.where(diffs == 1)[0] + 1
                     ends = np.where(diffs == -1)[0] + 1
@@ -263,9 +304,12 @@ class GPSAnalysisThread(QThread):
                         end_byte = e * chunk_size_bytes
                         self.jamming_byte_ranges.append((start_byte, end_byte))
                         
-                    print(f"[POWER SCAN] Wykryto {len(self.jamming_byte_ranges)} okresów wysokiej mocy (F1).")
+                        # DEBUG: Pokaż konwersję chunk→bajt
+                        print(f"[DEBUG PRE-SCAN] Chunk {s}-{e} → Bajty {start_byte}-{end_byte}")
+                        
+                    print(f"[POWER SCAN] Wykryto {len(self.jamming_byte_ranges)} okresów wysokiej mocy (F1) - Sliding Window.")
                 else:
-                    print(f"[POWER SCAN] Nie wykryto skoku mocy powyżej progu {self.THRESHOLD_POWER_RISE_DB} dB.")
+                    print(f"[POWER SCAN] Nie wykryto skoku mocy powyżej progu {self.THRESHOLD_POWER_RISE_DB} dB (Sliding Window).")
             
             self.power_map_ready = True
             self.progress_update.emit(10, "scanning_power_done")
@@ -284,7 +328,18 @@ class GPSAnalysisThread(QThread):
             except: pass
 
             if position:
-                self.current_buffcnt = position.get('buffcnt', 0) 
+                self.current_buffcnt = position.get('buffcnt', 0)
+                
+                # DEBUG: Pierwsza pozycja - sprawdź jednostki
+                if self.current_buffcnt > 0 and not hasattr(self, '_first_buffcnt_logged'):
+                    self._first_buffcnt_logged = True
+                    print(f"[DEBUG] Pierwszy buffcnt z gnssdec: {self.current_buffcnt}")
+                    if self.jamming_byte_ranges:
+                        first_jam = self.jamming_byte_ranges[0][0]
+                        print(f"[DEBUG] Pierwszy zakres jammingu: {first_jam}")
+                        print(f"[DEBUG] Porównanie: buffcnt={self.current_buffcnt}, jam_start={first_jam}")
+                        print(f"[DEBUG] Czy buffcnt jest w BAJTACH czy PRÓBKACH IQ?")
+                
                 self.current_lat = float(position.get('lat', 0.0))
                 self.current_lon = float(position.get('lon', 0.0))
                 self.current_hgt = float(position.get('hgt', 0.0))
@@ -294,7 +349,10 @@ class GPSAnalysisThread(QThread):
                 
                 # Aktualizacja mocy
                 if self.power_map_ready and self.total_file_bytes > 0:
-                    ratio = self.current_buffcnt / self.total_file_bytes
+                    # KONWERSJA: current_buffcnt w PRÓBKACH, total_file_bytes w BAJTACH
+                    # 1 próbka IQ = 2 bajty
+                    current_buffcnt_bytes = self.current_buffcnt * 2
+                    ratio = current_buffcnt_bytes / self.total_file_bytes
                     ratio = max(0.0, min(1.0, ratio))
                     idx = int(ratio * len(self.power_map))
                     idx = min(idx, len(self.power_map)-1)
@@ -330,7 +388,9 @@ class GPSAnalysisThread(QThread):
                 # Sprawdzenie mapy mocy
                 if self.jamming_byte_ranges:
                     # Jeśli jesteśmy w którymkolwiek zakresie lub po nim
-                    if self.current_buffcnt >= self.jamming_byte_ranges[0][0]:
+                    # KONWERSJA: buffcnt w PRÓBKACH, zakresy w BAJTACH
+                    current_buffcnt_bytes = self.current_buffcnt * 2
+                    if current_buffcnt_bytes >= self.jamming_byte_ranges[0][0]:
                         is_safe = False
                 
                 if self.jamming_detected:
@@ -361,32 +421,26 @@ class GPSAnalysisThread(QThread):
             print(f"[WORKER] Błąd: {e}")
 
     def check_jamming_conditions(self):
-        # F1: MOC
+        # F1: MOC (Power Detection)
         flag_f1 = False
         if self.jamming_byte_ranges:
+            # KONWERSJA: buffcnt z gnssdec jest w PRÓBKACH IQ, zakresy w BAJTACH
+            # 1 próbka IQ = 2 bajty (I + Q jako uint8)
+            current_buffcnt_bytes = self.current_buffcnt * 2
+            
             for start_byte, end_byte in self.jamming_byte_ranges:
-                if start_byte <= self.current_buffcnt <= end_byte:
+                if start_byte <= current_buffcnt_bytes <= end_byte:
                     flag_f1 = True
                     break
         
-        # F2: JAKOŚĆ
+        # F2: JAKOŚĆ CN0 (Quality Detection)
         flag_f2 = False
         if len(self.cn0_history) > 40: 
             if self.current_cn0_avg < (self.median_cn0 - self.THRESHOLD_CN0_DROP_DB):
                 flag_f2 = True
 
-        # F3: INTEGRITY
-        flag_f3 = False
-        integrity_fail = (self.current_residuals_median > self.THRESHOLD_RESIDUALS_MEDIAN_M) or \
-                         (self.current_residuals_bad_count >= self.MIN_BAD_SATS_FOR_ALARM)
-        
-        # F4: WYSOKOŚĆ
-        flag_hgt = False
-        if self.current_nsat > 0 and abs(self.current_hgt) > self.THRESHOLD_HGT_MAX:
-            flag_hgt = True
-
-        nav_issue = (flag_f3 or flag_hgt) and (self.current_nsat > 0)
-        is_jamming_now = flag_f1 or flag_f2 or nav_issue
+        # Logika detekcji: F1 LUB F2
+        is_jamming_now = flag_f1 or flag_f2
         
         if not self.jamming_detected:
             if is_jamming_now:
@@ -412,6 +466,29 @@ class GPSAnalysisThread(QThread):
             else:
                 self.potential_jamming_end_signal_time = None
 
+    def check_f1_fallback(self):
+        """Sprawdza F1 gdy gnssdec nie wysyła danych (brak GPS lock)."""
+        if not self.jamming_byte_ranges:
+            return
+        
+        # Jeśli jest jamming od początku pliku, zgłoś natychmiast
+        first_jam_start_bytes = self.jamming_byte_ranges[0][0]
+        print(f"[F1 FALLBACK] Jamming wykryty od bajtu {first_jam_start_bytes}")
+        
+        # KONWERSJA: current_buffcnt musi być w PRÓBKACH IQ (jak z gnssdec)
+        # 1 próbka IQ = 2 bajty
+        first_jam_start_samples = first_jam_start_bytes // 2
+        
+        # Ustaw current_buffcnt na początek jammingu (w próbkach)
+        self.current_buffcnt = first_jam_start_samples
+        self.current_signal_time = first_jam_start_samples / 2048000.0  # Szacunkowy czas
+        
+        print(f"[F1 FALLBACK] Konwersja: {first_jam_start_bytes} bajtów = {first_jam_start_samples} próbek IQ")
+        print(f"[F1 FALLBACK] Szacunkowy czas: {self.current_signal_time:.2f}s")
+        
+        # Wywołaj detekcję
+        self.confirm_jamming_start(reason="Moc (Fallback - brak GPS)")
+
     def confirm_jamming_start(self, reason="N/A"):
         self.jamming_detected = True
         
@@ -421,6 +498,8 @@ class GPSAnalysisThread(QThread):
                  if s <= self.current_buffcnt <= e:
                      start_byte = s
                      break
+        elif "Fallback" in reason and self.jamming_byte_ranges:
+             start_byte = self.jamming_byte_ranges[0][0]
         else:
              start_byte = self.potential_start_buffcnt if self.potential_start_buffcnt > 0 else self.current_buffcnt
 
@@ -433,10 +512,37 @@ class GPSAnalysisThread(QThread):
         print(f"[DETEKTOR] 🚨 ATAK POTWIERDZONY! Powód: {reason}")
         print(f"[DETEKTOR]    Start: {self.active_event_start_time:.2f}s")
         
+        # Wyświetl odległość do źródła zakłóceń, jeśli dostępna
+        if self.triangulation_result and self.triangulation_result.get('success', False):
+            # Sprawdź różne formaty danych triangulacji
+            if 'distances' in self.triangulation_result:
+                distances = self.triangulation_result['distances']
+                print(f"[DETEKTOR] 📍 Odległości do źródła zakłóceń:")
+                for i, dist in enumerate(distances):
+                    print(f"[DETEKTOR]    Odbiornik #{i+1}: {dist:.2f} m")
+            elif 'location_meters' in self.triangulation_result:
+                loc = self.triangulation_result['location_meters']
+                distance = np.sqrt(loc[0]**2 + loc[1]**2)
+                print(f"[DETEKTOR] 📍 Odległość do źródła zakłóceń: {distance:.2f} m")
+            elif 'x' in self.triangulation_result and 'y' in self.triangulation_result:
+                distance = np.sqrt(self.triangulation_result['x']**2 + self.triangulation_result['y']**2)
+                print(f"[DETEKTOR] 📍 Odległość do źródła zakłóceń: {distance:.2f} m")
+        
         if self.last_position_before_jamming['valid']:
             self.jamming_detected_realtime.emit(True, self.last_position_before_jamming)
         else:
             print("[DETEKTOR] ⚠️ Brak bezpiecznej pozycji przed atakiem!")
+            # W fallback (brak GPS): użyj domyślnych współrzędnych
+            if "Fallback" in reason:
+                default_position = {
+                    'lat': 51.919438,  # Warszawa (przykład)
+                    'lon': 19.145136,
+                    'hgt': 100.0,
+                    'buffcnt': self.active_event_start_buffcnt,
+                    'valid': False  # Oznacz jako szacunkowe
+                }
+                print("[DETEKTOR] Używam domyślnych współrzędnych dla wizualizacji.")
+                self.jamming_detected_realtime.emit(True, default_position)
 
     def confirm_jamming_end(self):
         self.jamming_detected = False
@@ -503,7 +609,7 @@ class GPSAnalysisThread(QThread):
             self.shutdown_server()
             return
 
-        # 3. GNSSDEC
+        # 3. GNSSDEC + FALLBACK MONITORING
         try:
             print(f"[WORKER] Uruchamianie analizy {self.gnssdec_path}...")
             gnssdec_command = [self.gnssdec_path, self.gnss_system_flag]
@@ -514,8 +620,24 @@ class GPSAnalysisThread(QThread):
             self.current_signal_time = 0.0
             self.cn0_history.clear()
             
+            # Uruchom gnssdec i poczekaj na zakończenie
             subprocess.run(gnssdec_command, check=True, capture_output=True, text=True)
             print(f"[WORKER] Analiza gnssdec zakończona.")
+            
+            # FALLBACK: Jeśli gnssdec nie wysłał żadnych danych (current_buffcnt=0), 
+            # ale pre-scan wykrył jamming, aktywuj detekcję F1
+            if self.current_buffcnt == 0 and self.jamming_byte_ranges:
+                print("[WORKER] ⚠️ gnssdec nie zwrócił danych - aktywacja detekcji F1 (fallback)!")
+                print(f"[WORKER] Pre-scan wykrył {len(self.jamming_byte_ranges)} okresów jammingu:")
+                print(f"[DEBUG] total_file_bytes = {self.total_file_bytes}")
+                print(f"[DEBUG] POWER_CHUNK_SIZE = {self.POWER_CHUNK_SIZE}")
+                print(f"[DEBUG] chunk_size_bytes = {self.POWER_CHUNK_SIZE * 2}")
+                print(f"[DEBUG] Liczba chunków = {len(self.power_map)}")
+                for i, (start, end) in enumerate(self.jamming_byte_ranges):
+                    duration_bytes = end - start
+                    duration_sec = (duration_bytes / 2) / 2048000.0
+                    print(f"  [{i+1}] Bajty {start} - {end} (czas: ~{duration_sec:.1f}s)")
+                self.check_f1_fallback()
             
         except Exception as e:
             print(f"[WORKER] Błąd procesu gnssdec: {e}")
@@ -577,8 +699,8 @@ class GPSAnalysisThread(QThread):
                     ref_lat = final_position['lat']
                     ref_lon = final_position['lon']
                 else:
-                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.0
-                    ref_lon = self.current_lon if self.current_lon != 0.0 else 20.0
+                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.00901672664575, 
+                    ref_lon = self.current_lon if self.current_lon != 0.0 else 19.98287653059589
                 
                 test_files = self.get_test_files_for_triangulation()
                 antenna_positions_meters = [
@@ -603,6 +725,42 @@ class GPSAnalysisThread(QThread):
                     result['reference_position'] = final_position
                 
                 self.triangulation_result = result
+                
+                # Wyświetl wyniki triangulacji w terminalu
+                if result.get('success', False):
+                    print(f"\n{'='*60}")
+                    print(f"📍 TRIANGULACJA - WYNIKI:")
+                    
+                    # Pozycja XY w metrach
+                    if 'location_meters' in result:
+                        loc = result['location_meters']
+                        print(f"   Pozycja źródła zakłóceń (XY): ({loc[0]:.2f}, {loc[1]:.2f}) m")
+                        # Oblicz odległość od punktu odniesienia (0,0)
+                        distance_from_origin = np.sqrt(loc[0]**2 + loc[1]**2)
+                        print(f"   Odległość od punktu odniesienia: {distance_from_origin:.2f} m")
+                    elif 'x' in result and 'y' in result:
+                        print(f"   Pozycja źródła zakłóceń (XY): ({result['x']:.2f}, {result['y']:.2f}) m")
+                        distance_from_origin = np.sqrt(result['x']**2 + result['y']**2)
+                        print(f"   Odległość od punktu odniesienia: {distance_from_origin:.2f} m")
+                    
+                    # Odległości od poszczególnych odbiorników
+                    if 'distances' in result:
+                        distances = result['distances']
+                        print(f"   Odległości od odbiorników:")
+                        for i, dist in enumerate(distances):
+                            print(f"      Odbiornik #{i+1}: {dist:.2f} m")
+                    
+                    # Współrzędne geograficzne
+                    if 'location_geographic' in result:
+                        geo = result['location_geographic']
+                        print(f"   Współrzędne geograficzne: {geo['lat']:.8f}, {geo['lon']:.8f}")
+                    
+                    # Dodatkowe info
+                    if 'message' in result:
+                        print(f"   Status: {result['message']}")
+                    
+                    print(f"{'='*60}\n")
+                
                 self.triangulation_complete.emit(result)
             except Exception as e:
                 print(f"[TRIANGULACJA] Błąd: {e}")

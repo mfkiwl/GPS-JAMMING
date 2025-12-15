@@ -6,7 +6,7 @@ import argparse
 
 # ==========================================================================
 # SZYBKA KONFIGURACJA
-DEFAULT_FILE_PATH = "" 
+DEFAULT_FILE_PATH = "/home/szymon/Downloads/7_12/10_1/capture1.bin" 
 # ==========================================================================
 
 def read_chunk(f, chunk_size, dtype_enum):

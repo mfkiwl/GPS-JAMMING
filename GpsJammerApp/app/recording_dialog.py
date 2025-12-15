@@ -292,76 +292,56 @@ class RecordingDialog(QDialog):
         scrollbar.setValue(scrollbar.maximum())
     
     def toggle_biast(self, state):
-        num_sdrs = self.num_sdrs_spin.value()
-        
         if state == Qt.CheckState.Checked.value:
-            self.log_message(f"🔧 Włączam BiasT na {num_sdrs} SDR(ach)...")
-            success_count = 0
-            
-            for i in range(num_sdrs):
-                self.log_message(f"🔧 SDR {i}: rtl_biast -d {i} -b 1")
-                try:
-                    result = subprocess.run(['rtl_biast', '-d', str(i), '-b', '1'], 
-                                          capture_output=True, 
-                                          text=True,
-                                          timeout=5)
-                    if result.returncode == 0:
-                        self.log_message(f"✅ BiasT włączony na SDR {i}")
-                        success_count += 1
-                        if result.stdout.strip():
-                            for line in result.stdout.strip().split('\n'):
-                                self.log_message(f"   📄 {line}")
-                    else:
-                        self.log_message(f"BŁĄD: Nie udało się włączyć BiasT na SDR {i} (kod: {result.returncode})")
-                        if result.stderr.strip():
-                            self.log_message(f"   📄 {result.stderr.strip()}")
-                except FileNotFoundError:
-                    self.log_message("BŁĄD: Nie znaleziono komendy rtl_biast")
-                    self.log_message("Pobierz i zainstaluj poprawne sterowniki z repozytorium: https://github.com/rtlsdrblog/rtl-sdr-blog")
-                    self.biast_checkbox.setChecked(False)
-                    return
-                except subprocess.TimeoutExpired:
-                    self.log_message(f"BŁĄD: Timeout podczas włączania BiasT na SDR {i}")
-                except Exception as e:
-                    self.log_message(f"BŁĄD na SDR {i}: {str(e)}")
-            
-            if success_count == 0:
-                self.log_message("Nie udało się włączyć BiasT na żadnym urządzeniu")
+            self.log_message("🔧 Uruchamiam: rtl_biast -b 1")
+            try:
+                result = subprocess.run(['rtl_biast', '-b', '1'], 
+                                      capture_output=True, 
+                                      text=True,
+                                      timeout=5)
+                if result.returncode == 0:
+                    self.log_message("BiasT włączony")
+                    if result.stdout.strip():
+                        for line in result.stdout.strip().split('\n'):
+                            self.log_message(f"📄 {line}")
+                else:
+                    self.log_message(f"BŁĄD: Nie udało się włączyć BiasT (kod: {result.returncode})")
+                    if result.stderr.strip():
+                        self.log_message(f"📄 {result.stderr.strip()}")
+                    self.biast_checkbox.setChecked(False) 
+            except FileNotFoundError:
+                self.log_message("BŁĄD: Nie znaleziono komendy rtl_biast")
+                self.log_message("Zainstaluj: sudo apt install rtl-sdr")
                 self.biast_checkbox.setChecked(False)
-            else:
-                self.log_message(f"✅ BiasT włączony pomyślnie na {success_count}/{num_sdrs} urządzeniach")
+            except subprocess.TimeoutExpired:
+                self.log_message("BŁĄD: Timeout podczas włączania BiasT")
+                self.biast_checkbox.setChecked(False)
+            except Exception as e:
+                self.log_message(f"BŁĄD: {str(e)}")
+                self.biast_checkbox.setChecked(False)
         else:
-            self.log_message(f"🔧 Wyłączam BiasT na {num_sdrs} SDR(ach)...")
-            success_count = 0
-            
-            for i in range(num_sdrs):
-                self.log_message(f"🔧 SDR {i}: rtl_biast -d {i} -b 0")
-                try:
-                    result = subprocess.run(['rtl_biast', '-d', str(i), '-b', '0'], 
-                                          capture_output=True, 
-                                          text=True,
-                                          timeout=5)
-                    if result.returncode == 0:
-                        self.log_message(f"✅ BiasT wyłączony na SDR {i}")
-                        success_count += 1
-                        if result.stdout.strip():
-                            for line in result.stdout.strip().split('\n'):
-                                self.log_message(f"   📄 {line}")
-                    else:
-                        self.log_message("BŁĄD: Nie udało się wyłączyć BiasT na SDR {i} (kod: {result.returncode})")
-                        if result.stderr.strip():
-                            self.log_message(f"   📄 {result.stderr.strip()}")
-                except FileNotFoundError:
-                    self.log_message("BŁĄD: Nie znaleziono komendy rtl_biast")
-                    self.log_message("Pobierz i zainstaluj poprawne sterowniki z repozytorium: https://github.com/rtlsdrblog/rtl-sdr-blog")
-                    return
-                except subprocess.TimeoutExpired:
-                    self.log_message(f"BŁĄD: Timeout podczas wyłączania BiasT na SDR {i}")
-                except Exception as e:
-                    self.log_message(f"BŁĄD na SDR {i}: {str(e)}")
-            
-            if success_count > 0:
-                self.log_message(f"✅ BiasT wyłączony pomyślnie na {success_count}/{num_sdrs} urządzeniach")
+            self.log_message("Uruchamiam: rtl_biast -b 0")
+            try:
+                result = subprocess.run(['rtl_biast', '-b', '0'], 
+                                      capture_output=True, 
+                                      text=True,
+                                      timeout=5)
+                if result.returncode == 0:
+                    self.log_message("BiasT wyłączony")
+                    if result.stdout.strip():
+                        for line in result.stdout.strip().split('\n'):
+                            self.log_message(f"📄 {line}")
+                else:
+                    self.log_message(f"BŁĄD: Nie udało się wyłączyć BiasT (kod: {result.returncode})")
+                    if result.stderr.strip():
+                        self.log_message(f"📄 {result.stderr.strip()}")
+            except FileNotFoundError:
+                self.log_message("BŁĄD: Nie znaleziono komendy rtl_biast")
+                self.log_message("Zainstaluj: sudo apt install rtl-sdr")
+            except subprocess.TimeoutExpired:
+                self.log_message("BŁĄD: Timeout podczas wyłączania BiasT")
+            except Exception as e:
+                self.log_message(f"BŁĄD: {str(e)}")
     
     def warmup_receiver(self):
         self.warmup_btn.setEnabled(False)
@@ -371,84 +351,63 @@ class RecordingDialog(QDialog):
         self.num_sdrs_spin.setEnabled(False)
         self.filename_edit.setEnabled(False)
         
-        num_sdrs = self.num_sdrs_spin.value()
-        self.log_message(f"🔥 Rozpoczynam nagrzewanie {num_sdrs} odbiornika/ów")
+        self.log_message("🔥 Rozpoczynam nagrzewanie odbiornika...")
+        self.log_message("Uruchamiam: rtl_test -p")
         
         def warmup_thread():
             device_error = {'found': False}
-            processes = []
-
-            for i in range(num_sdrs):
-                self.log_signal.emit(f"🔥 SDR {i}: Uruchamiam rtl_test -d {i} -p")
-                try:
-                    process = subprocess.Popen(['rtl_test', '-d', str(i), '-p'], 
-                                             stdout=subprocess.PIPE, 
-                                             stderr=subprocess.STDOUT,
-                                             text=True,
-                                             bufsize=1, 
-                                             universal_newlines=True)
-                    processes.append((i, process))
-                    self.log_signal.emit(f"✅ SDR {i}: Proces rtl_test uruchomiony (PID: {process.pid})")
-
-                    def read_output(sdr_num, proc):
-                        try:
-                            for line in proc.stdout:
-                                line = line.strip()
-                                if line:
-                                    self.log_signal.emit(f"📄 SDR {sdr_num}: {line}")
-                                    if "No supported devices found" in line or "usb_claim_interface error" in line:
-                                        device_error['found'] = True
-                                        self.log_signal.emit(f"BŁĄD: Nie znaleziono urządzenia SDR {sdr_num}!")
-                        except:
-                            pass
-                    
-                    reader_thread = threading.Thread(target=read_output, args=(i, process))
-                    reader_thread.daemon = True
-                    reader_thread.start()
-                    
-                except FileNotFoundError:
-                    self.log_signal.emit("BŁĄD: Nie znaleziono komendy rtl_test")
-                    self.log_signal.emit("Pobierz i zainstaluj poprawne sterowniki z repozytorium: https://github.com/rtlsdrblog/rtl-sdr-blog")
-                    device_error['found'] = True
-                    break
-                except Exception as e:
-                    self.log_signal.emit(f"BŁĄD podczas uruchamiania SDR {i}: {str(e)}")
-                    device_error['found'] = True
-                    break
             
-            if not processes:
-                self.log_signal.emit("Nie udało się uruchomić żadnego SDR")
-                self.warmup_complete.emit()
-                return
-
-            for i in range(60, 0, -1):
-                if device_error['found']:
-                    self.log_signal.emit("Przerwano nagrzewanie z powodu błędu")
-                    break
-                if i % 10 == 0:
-                    self.log_signal.emit(f"⏱️ Pozostało {i} sekund")
-                time.sleep(1)
-            
-            self.log_signal.emit("⏹️  Zatrzymuję wszystkie procesy rtl_test")
-            for sdr_num, process in processes:
-                try:
-                    self.log_signal.emit(f"⏹️  Zatrzymuję SDR {sdr_num}")
-                    process.terminate()
-                    
+            try:
+                process = subprocess.Popen(['rtl_test', '-p'], 
+                                         stdout=subprocess.PIPE, 
+                                         stderr=subprocess.STDOUT,
+                                         text=True,
+                                         bufsize=1, 
+                                         universal_newlines=True)
+                self.log_signal.emit("Proces rtl_test uruchomiony")
+                
+                def read_output():
                     try:
-                        process.wait(timeout=3)
-                        self.log_signal.emit(f"✅ SDR {sdr_num}: Proces zakończony")
-                    except subprocess.TimeoutExpired:
-                        self.log_signal.emit(f"⚠️  Wymuszam zakończenie SDR {sdr_num}...")
-                        process.kill()
-                        process.wait()
-                except Exception as e:
-                    self.log_signal.emit(f"❌ Błąd podczas zatrzymywania SDR {sdr_num}: {str(e)}")
-            
-            if not device_error['found']:
-                self.log_signal.emit("✅ Nagrzewanie zakończone pomyślnie!")
-            else:
-                self.log_signal.emit("⚠️  Nagrzewanie zakończone z błędami")
+                        for line in process.stdout:
+                            line = line.strip()
+                            if line:
+                                self.log_signal.emit(f"📄 {line}")
+                                if "No supported devices found" in line:
+                                    device_error['found'] = True
+                                    self.log_signal.emit("BŁĄD: Nie znaleziono urządzenia RTL-SDR!")
+                                    self.log_signal.emit("Upewnij się, że urządzenie jest podłączone")
+                    except:
+                        pass
+                
+                reader_thread = threading.Thread(target=read_output)
+                reader_thread.daemon = True
+                reader_thread.start()
+                for i in range(60, 0, -1):
+                    if device_error['found']:
+                        self.log_signal.emit("⚠️  Przerwano nagrzewanie z powodu błędu")
+                        break
+                    if i % 10 == 0:
+                        self.log_signal.emit(f"⏱️  Pozostało {i} sekund...")
+                    time.sleep(1)
+                
+                self.log_signal.emit(" Zatrzymuję rtl_test...")
+                process.terminate()
+                
+                try:
+                    process.wait(timeout=3)
+                    self.log_signal.emit("Proces rtl_test zakończony")
+                except subprocess.TimeoutExpired:
+                    self.log_signal.emit("Wymuszam zakończenie rtl_test...")
+                    process.kill()
+                    process.wait()
+                
+                self.log_signal.emit("✅ Nagrzewanie zakończone!")
+                
+            except FileNotFoundError:
+                self.log_signal.emit("BŁĄD: Nie znaleziono komendy rtl_test")
+                self.log_signal.emit("Zainstaluj rtl-sdr: sudo apt install rtl-sdr")
+            except Exception as e:
+                self.log_signal.emit(f"❌ BŁĄD podczas nagrzewania: {str(e)}")
             
             self.warmup_complete.emit()
         
@@ -523,9 +482,10 @@ class RecordingDialog(QDialog):
             base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
             output_file = f"{i}_{base_name}.bin"
             
+            # STAŁY GAIN: 38.2 dB (wyłącza AGC, zapobiega fałszywym alarmom z wielodrogowości)
             cmd = ['rtl_sdr', '-f', str(frequency_hz), '-s', str(sample_rate_hz), 
-                   '-g', 'list', '-d', str(i), output_file]
-            self.log_message(f"SDR {i+1}: {' '.join(cmd)}")
+                   '-g', '38.2', '-d', str(i), output_file]
+            self.log_message(f"SDR {i+1}: {' '.join(cmd)} [GAIN: 38.2 dB]")
             
             try:
                 process = subprocess.Popen(cmd, 
@@ -552,7 +512,7 @@ class RecordingDialog(QDialog):
                 
             except FileNotFoundError:
                 self.log_message(f"❌ BŁĄD: Nie znaleziono komendy rtl_sdr")
-                self.log_message("💡 Pobierz i zainstaluj poprawne sterowniki z repozytorium: https://github.com/rtlsdrblog/rtl-sdr-blog")
+                self.log_message("💡 Zainstaluj: sudo apt install rtl-sdr")
                 self.stop_recording()
                 return
             except Exception as e:
@@ -571,20 +531,20 @@ class RecordingDialog(QDialog):
         self.log_message("✅ Nagrywanie aktywne!")
     
     def stop_recording(self):
-        self.log_message("⏹️ Zatrzymuję nagrywanie")
+        self.log_message("⏹️  Zatrzymuję nagrywanie...")
         
         self.is_recording = False
         
         for i, process in enumerate(self.recording_processes):
             try:
-                self.log_message(f"⏹️  Zatrzymuję SDR {i+1}")
+                self.log_message(f"⏹️  Zatrzymuję SDR {i+1}...")
                 process.terminate()
                 
                 try:
                     process.wait(timeout=3)
                     self.log_message(f"✅ SDR {i+1} zakończony")
                 except subprocess.TimeoutExpired:
-                    self.log_message(f"⚠️ Wymuszam zakończenie SDR {i+1}")
+                    self.log_message(f"⚠️  Wymuszam zakończenie SDR {i+1}...")
                     process.kill()
                     process.wait()
             except Exception as e:
