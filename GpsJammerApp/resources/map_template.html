@@ -185,9 +185,48 @@
     }};
     legend.addTo(map);
 
+    let spoofingAlert = null;
+
+    function showSpoofingAlert(satellites) {{
+      if (!spoofingAlert) {{
+        spoofingAlert = L.control({{position: 'topright'}});
+        spoofingAlert.onAdd = function (map) {{
+          const div = L.DomUtil.create('div', 'info');
+          div.style.backgroundColor = '#ff4444';
+          div.style.color = 'white';
+          div.style.fontWeight = 'bold';
+          div.style.padding = '15px';
+          div.style.borderRadius = '8px';
+          div.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+          div.style.maxWidth = '400px';
+          div.id = 'spoofing-alert';
+          div.innerHTML = `
+            <div style="font-size: 16px; margin-bottom: 8px;">⚠️ UWAGA! WYKRYTO SPOOFING</div>
+            <div style="font-size: 13px;">Sygnał z satelitów: <span id="sat-list">${{satellites}}</span> jest prawdopodobnie fałszywy!</div>
+          `;
+          return div;
+        }};
+        spoofingAlert.addTo(map);
+      }} else {{
+        const satList = document.getElementById('sat-list');
+        if (satList) {{
+          satList.textContent = satellites;
+        }}
+      }}
+    }}
+
+    function hideSpoofingAlert() {{
+      if (spoofingAlert) {{
+        map.removeControl(spoofingAlert);
+        spoofingAlert = null;
+      }}
+    }}
+
     window.clearSignalMarkers = clearSignalMarkers;
     window.changeMapLayer = changeMapLayer;
     window.updateLivePosition = updateLivePosition;
+    window.showSpoofingAlert = showSpoofingAlert;
+    window.hideSpoofingAlert = hideSpoofingAlert;
   </script>
 </body>
 </html>

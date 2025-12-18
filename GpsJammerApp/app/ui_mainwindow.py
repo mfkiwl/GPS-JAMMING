@@ -662,6 +662,8 @@ class MainWindow(QMainWindow):
 
         self.clear_markers_silently()
         self.jammer_shown = False
+        
+        self.web_view.page().runJavaScript("hideSpoofingAlert();")
         self.analyze_btn.setEnabled(False)
         self.browse_btn.setEnabled(False)
         self.settings_btn.setEnabled(False)
@@ -855,6 +857,9 @@ class MainWindow(QMainWindow):
         
         scrollbar = self.results_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        
+        js_show_alert = f"showSpoofingAlert('{sats_text}');"
+        self.web_view.page().runJavaScript(js_show_alert)
 
     def stop_analysis(self):
         """Zatrzymuje trwającą analizę"""
@@ -879,6 +884,8 @@ class MainWindow(QMainWindow):
             
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Analiza przerwana")
+            
+            self.web_view.page().runJavaScript("hideSpoofingAlert();")
     
     def on_analysis_thread_finished(self):
         self.analyze_btn.setEnabled(True)
@@ -890,6 +897,8 @@ class MainWindow(QMainWindow):
         self.glonass_btn.setEnabled(True)
         self.galileo_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        
+        self.web_view.page().runJavaScript("hideSpoofingAlert();")
 
     def analysis_finished(self, points):
         self.analyze_btn.setEnabled(True)
