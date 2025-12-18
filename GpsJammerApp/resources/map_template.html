@@ -186,6 +186,7 @@
     legend.addTo(map);
 
     let spoofingAlert = null;
+    let jammingAlert = null;
 
     function showSpoofingAlert(satellites) {{
       if (!spoofingAlert) {{
@@ -222,11 +223,43 @@
       }}
     }}
 
+    function showJammingAlert() {{
+      if (!jammingAlert) {{
+        jammingAlert = L.control({{position: 'topleft'}});
+        jammingAlert.onAdd = function (map) {{
+          const div = L.DomUtil.create('div', 'info');
+          div.style.backgroundColor = '#ff9800';
+          div.style.color = 'white';
+          div.style.fontWeight = 'bold';
+          div.style.padding = '15px';
+          div.style.borderRadius = '8px';
+          div.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+          div.style.maxWidth = '300px';
+          div.id = 'jamming-alert';
+          div.innerHTML = `
+            <div style="font-size: 16px; margin-bottom: 8px;">🚨 UWAGA! WYKRYTO JAMMING</div>
+            <div style="font-size: 13px;">Sygnał GPS jest zakłócany!</div>
+          `;
+          return div;
+        }};
+        jammingAlert.addTo(map);
+      }}
+    }}
+
+    function hideJammingAlert() {{
+      if (jammingAlert) {{
+        map.removeControl(jammingAlert);
+        jammingAlert = null;
+      }}
+    }}
+
     window.clearSignalMarkers = clearSignalMarkers;
     window.changeMapLayer = changeMapLayer;
     window.updateLivePosition = updateLivePosition;
     window.showSpoofingAlert = showSpoofingAlert;
     window.hideSpoofingAlert = hideSpoofingAlert;
+    window.showJammingAlert = showJammingAlert;
+    window.hideJammingAlert = hideJammingAlert;
   </script>
 </body>
 </html>

@@ -664,6 +664,7 @@ class MainWindow(QMainWindow):
         self.jammer_shown = False
         
         self.web_view.page().runJavaScript("hideSpoofingAlert();")
+        self.web_view.page().runJavaScript("hideJammingAlert();")
         self.analyze_btn.setEnabled(False)
         self.browse_btn.setEnabled(False)
         self.settings_btn.setEnabled(False)
@@ -700,6 +701,7 @@ class MainWindow(QMainWindow):
         self.analysis_thread.new_analysis_text.connect(self.update_analysis_text)
         self.analysis_thread.triangulation_complete.connect(self.on_triangulation_result)
         self.analysis_thread.spoofing_detected.connect(self.on_spoofing_detected)
+        self.analysis_thread.jamming_detected_realtime.connect(self.on_jamming_detected)
         self.analysis_thread.finished.connect(self.on_analysis_thread_finished)
         
         self.analysis_thread.start()
@@ -831,7 +833,6 @@ class MainWindow(QMainWindow):
         detection_score = spoofing_data['detection_score']
         required_score = spoofing_data['required_score']
         
-        # Mapowanie nazw detektorów na przyjazne nazwy
         method_names = {
             'pseudorange_doppler': 'Pseudozasięg-Doppler',
             'doppler_consistency': 'Spójność Dopplera',
@@ -860,6 +861,13 @@ class MainWindow(QMainWindow):
         
         js_show_alert = f"showSpoofingAlert('{sats_text}');"
         self.web_view.page().runJavaScript(js_show_alert)
+    
+    def on_jamming_detected(self, is_jamming, position_data):
+        """Obsługa wykrycia jammingu"""
+        if is_jamming:
+            self.web_view.page().runJavaScript("showJammingAlert();")
+        else:
+            self.web_view.page().runJavaScript("hideJammingAlert();")
 
     def stop_analysis(self):
         """Zatrzymuje trwającą analizę"""
@@ -886,6 +894,7 @@ class MainWindow(QMainWindow):
             self.progress_bar.setFormat("Analiza przerwana")
             
             self.web_view.page().runJavaScript("hideSpoofingAlert();")
+            self.web_view.page().runJavaScript("hideJammingAlert();")
     
     def on_analysis_thread_finished(self):
         self.analyze_btn.setEnabled(True)
@@ -899,6 +908,7 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         
         self.web_view.page().runJavaScript("hideSpoofingAlert();")
+        self.web_view.page().runJavaScript("hideJammingAlert();")
 
     def analysis_finished(self, points):
         self.analyze_btn.setEnabled(True)
