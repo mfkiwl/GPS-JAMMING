@@ -13,6 +13,11 @@ import datetime
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'skrypty'))
 from triangulateRSSI import triangulate_jammer_location
 
+# Import spoofing detection
+backend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'backend')
+sys.path.append(backend_path)
+from spoofing.spoofing_detection import SpoofingDetector
+
 # [FIX] Klasa serwera z wymuszonym ponownym użyciem portu
 # Zapobiega błędowi "Address already in use" przy restarcie analizy
 class ReusableHTTPServer(HTTPServer):
@@ -74,10 +79,12 @@ class GPSAnalysisThread(QThread):
     jamming_analysis_complete = Signal(list) 
     triangulation_complete = Signal(dict)
     jamming_detected_realtime = Signal(bool, dict)
+    spoofing_detected = Signal(dict)
 
-    def __init__(self, file_paths, power_threshold=6.0, antenna_positions=None, satellite_system='GPS', hold_position=False):
+    def __init__(self, file_paths, power_threshold=6.0, antenna_positions=None, satellite_system='GPS', hold_position=False, enable_spoofing_detection=False):
         super().__init__()
         self.file_paths = file_paths
+        self.enable_spoofing_detection = enable_spoofing_detection
         
         self.POWER_CHUNK_SIZE = 20480  # [FIX] Dopasowano do wykres.py dla spójności 
         
@@ -103,14 +110,28 @@ class GPSAnalysisThread(QThread):
         self.satellite_system = satellite_system
         if satellite_system == 'GPS':
             self.gnss_system_flag = '-g'
+            self.spoofing_system_flag = 'g'
         elif satellite_system == 'GLONASS':
             self.gnss_system_flag = '-n'
+            self.spoofing_system_flag = 'n'
         elif satellite_system == 'Galileo':
             self.gnss_system_flag = '-l'
+            self.spoofing_system_flag = 'l'
         else:
             self.gnss_system_flag = '-g'
+            self.spoofing_system_flag = 'g'
         
         self.hold_position = hold_position
+        
+        # Inicjalizacja detektora spoofingu
+        self.spoofing_detector = None
+        if self.enable_spoofing_detection:
+            print(f"[SPOOFING] Włączono wykrywanie spoofingu dla systemu: {self.spoofing_system_flag}")
+            self.spoofing_detector = SpoofingDetector(
+                system=self.spoofing_system_flag,
+                alert_threshold=3,
+                required_score=4
+            )
         
         # Zmienne stanu
         self.current_buffcnt = 0
@@ -416,6 +437,29 @@ class GPSAnalysisThread(QThread):
             
             if not self.jamming_detected and (self.current_lat != 0.0 or self.current_lon != 0.0):
                 self.new_position_data.emit(self.current_lat, self.current_lon, self.current_hgt)
+            
+            # Wykrywanie spoofingu
+            if self.spoofing_detector is not None:
+                try:
+                    results, alert_info = self.spoofing_detector.process_data(data)
+                    
+                    if alert_info['spoofing_detected']:
+                        summary = self.spoofing_detector.get_summary(results)
+                        
+                        spoofing_data = {
+                            'timestamp': self.current_signal_time,
+                            'suspicious_satellites': summary['suspicious_satellites'],
+                            'methods_triggered': summary['methods_triggered'],
+                            'alert_count': alert_info['alert_count'],
+                            'detection_score': alert_info['detection_score'],
+                            'required_score': alert_info['required_score'],
+                            'results': results
+                        }
+                        
+                        self.spoofing_detected.emit(spoofing_data)
+                        
+                except Exception as e:
+                    print(f"[SPOOFING] Błąd podczas detekcji: {e}")
                     
         except Exception as e:
             print(f"[WORKER] Błąd: {e}")

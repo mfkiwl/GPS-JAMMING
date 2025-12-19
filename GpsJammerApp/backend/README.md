@@ -1,6 +1,19 @@
-# Tool for decoding GNSS systems
+## Instalacja zależności na systemie opartym na Debianie:
 
-What is working:
-- GPS (acq + track + decode + pvt)
-- Galileo (acq + track, decode is failing on CRC on our recordings, added pvt solver capabilities)
-- Glonass (zero real recordings, using sim (sim have problem with eph) we can see that acq + track + decode is working)
+```sh
+sudo apt install build-essential libusb-1.0-0-dev libfec-dev libfftw3-dev
+```
+
+## Kompilacja:
+
+```sh
+cd bin;
+make clean;
+make
+```
+
+## Sposób uruchomienia:
+
+```sh
+./gnssdec -{g/a/l} nagranie.bin
+```

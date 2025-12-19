@@ -91,7 +91,8 @@ class MainWindow(QMainWindow):
             'analysis_params': {
                 'frequency': 1575.42,
                 'threshold': 120,
-                'sample_rate': 2.048
+                'sample_rate': 2.048,
+                'spoofing_detection': False
             }
         }
         self.update_satellite_system_display()
@@ -661,6 +662,9 @@ class MainWindow(QMainWindow):
 
         self.clear_markers_silently()
         self.jammer_shown = False
+        
+        self.web_view.page().runJavaScript("hideSpoofingAlert();")
+        self.web_view.page().runJavaScript("hideJammingAlert();")
         self.analyze_btn.setEnabled(False)
         self.browse_btn.setEnabled(False)
         self.settings_btn.setEnabled(False)
@@ -675,10 +679,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         
         hold_position_status = "✅ WŁĄCZONE" if self.current_settings['analysis_params'].get('hold_position', False) else "❌ WYŁĄCZONE"
+        spoofing_detection_status = "✅ WŁĄCZONE" if self.current_settings['analysis_params'].get('spoofing_detection', False) else "❌ WYŁĄCZONE"
         self.results_text.setPlainText(
             f"Rozpoczynam analizę {len(self.current_files)} plik(ów)...\n"
             f"🛰️ System satelitarny: {self.selected_satellite_system}\n"
             f"📍 Utrzymuj pozycję: {hold_position_status}\n"
+            f"🔍 Wykrywanie spoofingu: {spoofing_detection_status}\n"
         )
         
         self.analysis_thread = GPSAnalysisThread(
@@ -686,13 +692,16 @@ class MainWindow(QMainWindow):
             power_threshold=self.current_settings['analysis_params'].get('threshold', 120.0),
             antenna_positions=self.current_settings.get('antenna_positions'),
             satellite_system=self.selected_satellite_system,
-            hold_position=self.current_settings['analysis_params'].get('hold_position', False)
+            hold_position=self.current_settings['analysis_params'].get('hold_position', False),
+            enable_spoofing_detection=self.current_settings['analysis_params'].get('spoofing_detection', False)
         )
         self.analysis_thread.progress_update.connect(self.update_progress)
         self.analysis_thread.analysis_complete.connect(self.analysis_finished)
         self.analysis_thread.new_position_data.connect(self.update_map_position)
         self.analysis_thread.new_analysis_text.connect(self.update_analysis_text)
         self.analysis_thread.triangulation_complete.connect(self.on_triangulation_result)
+        self.analysis_thread.spoofing_detected.connect(self.on_spoofing_detected)
+        self.analysis_thread.jamming_detected_realtime.connect(self.on_jamming_detected)
         self.analysis_thread.finished.connect(self.on_analysis_thread_finished)
         
         self.analysis_thread.start()
@@ -815,6 +824,51 @@ class MainWindow(QMainWindow):
             current_text = self.results_text.toPlainText()
             self.results_text.setPlainText(current_text + error_text)
 
+    def on_spoofing_detected(self, spoofing_data):
+        """Obsługa wykrycia spoofingu"""
+        timestamp = spoofing_data['timestamp']
+        suspicious_sats = spoofing_data['suspicious_satellites']
+        methods = spoofing_data['methods_triggered']
+        alert_count = spoofing_data['alert_count']
+        detection_score = spoofing_data['detection_score']
+        required_score = spoofing_data['required_score']
+        
+        method_names = {
+            'pseudorange_doppler': 'Pseudozasięg-Doppler',
+            'doppler_consistency': 'Spójność Dopplera',
+            'snr_monitoring': 'Monitorowanie SNR',
+            'geometry_verification': 'Weryfikacja Geometrii',
+            'clock_drift': 'Dryft Zegara',
+            'carrier_phase_consistency': 'Spójność Fazy Nośnej'
+        }
+        
+        methods_text = ', '.join([method_names.get(m, m) for m in methods])
+        sats_text = ', '.join([str(s) for s in suspicious_sats])
+        
+        spoofing_text = (
+            f"\n🚨 WYKRYTO SPOOFING! [t={timestamp:.2f}s]\n"
+            f"   Podejrzane satelity: {sats_text}\n"
+            f"   Aktywne detektory: {methods_text}\n"
+            f"   Wynik detekcji: {detection_score}/{required_score}\n"
+            f"   Licznik alertów: {alert_count}\n"
+        )
+        
+        current_text = self.results_text.toPlainText()
+        self.results_text.setPlainText(current_text + spoofing_text)
+        
+        scrollbar = self.results_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        
+        js_show_alert = f"showSpoofingAlert('{sats_text}');"
+        self.web_view.page().runJavaScript(js_show_alert)
+    
+    def on_jamming_detected(self, is_jamming, position_data):
+        """Obsługa wykrycia jammingu"""
+        if is_jamming:
+            self.web_view.page().runJavaScript("showJammingAlert();")
+        else:
+            self.web_view.page().runJavaScript("hideJammingAlert();")
+
     def stop_analysis(self):
         """Zatrzymuje trwającą analizę"""
         if self.analysis_thread and self.analysis_thread.isRunning():
@@ -838,6 +892,9 @@ class MainWindow(QMainWindow):
             
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Analiza przerwana")
+            
+            self.web_view.page().runJavaScript("hideSpoofingAlert();")
+            self.web_view.page().runJavaScript("hideJammingAlert();")
     
     def on_analysis_thread_finished(self):
         self.analyze_btn.setEnabled(True)
@@ -849,6 +906,9 @@ class MainWindow(QMainWindow):
         self.glonass_btn.setEnabled(True)
         self.galileo_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        
+        self.web_view.page().runJavaScript("hideSpoofingAlert();")
+        self.web_view.page().runJavaScript("hideJammingAlert();")
 
     def analysis_finished(self, points):
         self.analyze_btn.setEnabled(True)

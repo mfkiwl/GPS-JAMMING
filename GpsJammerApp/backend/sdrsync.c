@@ -1,5 +1,4 @@
 #include "sdr.h"
-
 extern void *syncthread(void *arg) {
     int i, j, nsat, isat[MAXOBS], ind[MAXSAT] = {0}, refi;
     uint64_t sampref, sampbase, codei[MAXSAT], diffcnt, mincodei;
@@ -8,19 +7,14 @@ extern void *syncthread(void *arg) {
     sdrtrk_t trk[MAXSAT] = {{0}};
     int ret = 0;
     char bufferSync[MSG_LENGTH];
-
     while (!sdrstat.stopflag) {
-
         mlock(hobsmtx);
-
         for (i = nsat = 0; i < sdrini.nch; i++) {
             int is_valid = 0;
             if (sdrch[i].nav.flagdec) {
                 if (sdrch[i].sys == SYS_GLO) {
-                    /* GLONASS: check if ephemeris has valid iode */
                     is_valid = (sdrch[i].nav.sdreph.geph.iode != 0);
                 } else {
-                    /* GPS/Galileo: check if week is set */
                     is_valid = (sdrch[i].nav.sdreph.eph.week != 0);
                 }
             }
@@ -31,19 +25,16 @@ extern void *syncthread(void *arg) {
             }
         }
         unmlock(hobsmtx);
-
         oldreftow = reftow;
         reftow = 3600 * 24 * 7;
         for (i = 0; i < nsat; i++) {
             if (trk[i].tow[0] < reftow)
                 reftow = trk[i].tow[0];
         }
-
         if (nsat == 0 || oldreftow == reftow ||
             ((int)(reftow * 1000) % sdrini.outms) != 0) {
             continue;
         }
-
         for (i = 0; i < nsat; i++) {
             for (j = 0; j < OBSINTERPN; j++) {
                 if (fabs(trk[i].tow[j] - reftow) < 1E-4) {
@@ -56,7 +47,6 @@ extern void *syncthread(void *arg) {
                           sdrch[isat[i]].satstr, trk[i].tow[OBSINTERPN - 1],
                           reftow);
         }
-
         mincodei = UINT64_MAX;
         refi = 0;
         for (i = 0; i < nsat; i++) {
@@ -67,7 +57,6 @@ extern void *syncthread(void *arg) {
                 mincodei = trk[i].codei[ind[i]];
             }
         }
-
         diffcnt =
             trk[refi].cntout[ind[refi]] - sdrch[isat[refi]].nav.firstsfcnt;
         sampref =
@@ -77,7 +66,6 @@ extern void *syncthread(void *arg) {
         sampbase =
             trk[refi].codei[OBSINTERPN - 1] - 10 * sdrch[isat[refi]].nsamp;
         samprefd = (double)(sampref - sampbase);
-
         for (i = 0; i < nsat; i++) {
             obs[i].sys = sdrch[isat[i]].sys;
             obs[i].prn = sdrch[isat[i]].prn;
@@ -85,65 +73,51 @@ extern void *syncthread(void *arg) {
             obs[i].tow = reftow + (double)(PTIMING) / 1000;
             obs[i].P = CLIGHT * sdrch[isat[i]].ti *
                        ((double)(codei[i] - sampref) - remcode[i]);
-
             uint64todouble(trk[i].codei, sampbase, OBSINTERPN, codeid);
             obs[i].L = interp1(codeid, trk[i].L, OBSINTERPN, samprefd);
             obs[i].D = interp1(codeid, trk[i].D, OBSINTERPN, samprefd);
             obs[i].S = trk[i].S[0];
         }
-
         sdrstat.nsatValid = nsat;
-
         mlock(hobsvecmtx);
-
+        uint64_t ref_codei = codei[refi];
+        double ref_remcode = remcode[refi];
         for (int j = 0; j < MAXSAT; j++) {
-            sdrstat.obs_v[j * 11 + 0] = j + 1;
-            sdrstat.obs_v[j * 11 + 1] = 0;
-            sdrstat.obs_v[j * 11 + 2] = 0;
-            sdrstat.obs_v[j * 11 + 3] = 0;
-            sdrstat.obs_v[j * 11 + 4] = 0;
-            sdrstat.obs_v[j * 11 + 5] = 0;
-            sdrstat.obs_v[j * 11 + 6] = 0;
-            sdrstat.obs_v[j * 11 + 7] = 0;
-            sdrstat.obs_v[j * 11 + 8] = 0;
-            sdrstat.obsValidList[j] = 0;
+            sdrstat.obs_v[j * 14 + 1] = 0;
         }
-
         for (i = 0; i < nsat; i++) {
             int prn = obs[i].prn;
             if (prn >= 1 && prn <= MAXSAT) {
-                int base = (prn - 1) * 11;
+                int base = (prn - 1) * 14;
                 sdrstat.obs_v[base + 0] = (double)prn;
                 sdrstat.obs_v[base + 1] = 1;
                 sdrstat.obs_v[base + 5] = obs[i].P;
                 sdrstat.obs_v[base + 6] = obs[i].tow;
                 sdrstat.obs_v[base + 7] = (double)obs[i].week;
                 sdrstat.obs_v[base + 8] = obs[i].S;
+                sdrstat.obs_v[base + 11] = obs[i].L;
+                sdrstat.obs_v[base + 12] = obs[i].D;
+                sdrstat.obs_v[base + 13] =
+                    (double)(codei[i] - ref_codei) + (remcode[i] - ref_remcode);
             }
         }
         unmlock(hobsvecmtx);
-
-        ret = updateObsList();
-
-        precheckObs();
-
+        ret = refreshValidSatellites();
+        validateMeasurements();
         mlock(hobsvecmtx);
         nsat = sdrstat.nsatValid;
         unmlock(hobsvecmtx);
-
         if (nsat >= 4) {
-            ret = pvtProcessor();
+            ret = executeNavigationSolution();
             if (ret != 0) {
-                printf("errorDetected: exiting pvtProcessor\n");
+                printf("errorDetected: exiting executeNavigationSolution\n");
             }
         } else {
-            snprintf(
-                bufferSync, sizeof(bufferSync),
-                "%.3f  pvtProcessor: PVT not solved for, less than four SVs",
-                sdrstat.elapsedTime);
+            snprintf(bufferSync, sizeof(bufferSync),
+                     "%.3f  NavSolver: PVT not solved for, less than four SVs",
+                     sdrstat.elapsedTime);
             add_message(bufferSync);
         }
-
         if (sdrstat.printflag) {
             FILE *fptr;
             char *fname = "obsData.txt";
@@ -151,7 +125,6 @@ extern void *syncthread(void *arg) {
             if (fptr == NULL) {
                 perror("Error opening file\n");
             }
-
             for (int k = 0; k < nsat; k++) {
                 fprintf(fptr, "%d\n", obs[k].prn);
                 fprintf(fptr, "%.14e\n", obs[k].tow);
@@ -164,10 +137,8 @@ extern void *syncthread(void *arg) {
                 }
                 fprintf(fptr, "%d\n", sdrch[ind].nav.sdreph.eph.sat);
                 fprintf(fptr, "%.14e\n", 0.0);
-
                 fprintf(fptr, "%.14e\n", sdrch[ind].nav.sdreph.eph.toes);
                 fprintf(fptr, "%.14e\n", 0.0);
-
                 fprintf(fptr, "%.14e\n", sqrt(sdrch[ind].nav.sdreph.eph.A));
                 fprintf(fptr, "%.14e\n", sdrch[ind].nav.sdreph.eph.e);
                 fprintf(fptr, "%.14e\n", sdrch[ind].nav.sdreph.eph.M0);
@@ -195,14 +166,11 @@ extern void *syncthread(void *arg) {
                 fprintf(fptr, "%d\n", sdrch[ind].nav.sdreph.eph.sva);
                 fprintf(fptr, "%.14e\n", sdrch[ind].nav.sdreph.eph.fit);
             }
-
             SDRPRINTF("sdrData file written.\n");
-
             fclose(fptr);
             sdrstat.printflag = 0;
         }
     }
-
     SDRPRINTF("SDR syncthread finished!\n");
     return 0;
 }

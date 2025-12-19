@@ -145,6 +145,34 @@ class SettingsDialog(QDialog):
         """)
         analysis_layout.addWidget(self.hold_position_checkbox, 3, 1)
         
+        analysis_layout.addWidget(QLabel("Wykrywanie Spoofingu:"), 4, 0)
+        self.spoofing_detection_checkbox = QCheckBox()
+        self.spoofing_detection_checkbox.setChecked(False)
+        self.spoofing_detection_checkbox.setStyleSheet("""
+        QCheckBox {
+            font-size: 13px;
+            color: #2c3e50;
+        }
+        QCheckBox::indicator {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #bdc3c7;
+            border-radius: 5px;
+            background-color: white;
+        }
+        QCheckBox::indicator:checked {
+            background-color: #e74c3c;
+            border-color: #e74c3c;
+            image: url(none);
+        }
+        QCheckBox::indicator:checked:after {
+            content: "✓";
+            color: white;
+            font-weight: bold;
+        }
+        """)
+        analysis_layout.addWidget(self.spoofing_detection_checkbox, 4, 1)
+        
         self.calibrate_btn = QPushButton("Oblicz próg")
         self.calibrate_btn.clicked.connect(self.on_calibrate_clicked)
         self.calibrate_btn.setStyleSheet("""
@@ -166,7 +194,7 @@ class SettingsDialog(QDialog):
             background-color: #21618c;
         }
         """)
-        analysis_layout.addWidget(self.calibrate_btn, 4, 0, 1, 2)
+        analysis_layout.addWidget(self.calibrate_btn, 5, 0, 1, 2)
         
         layout.addWidget(analysis_group)
         
@@ -361,7 +389,8 @@ class SettingsDialog(QDialog):
                 'frequency': float(frequency_text),
                 'threshold': int(self.threshold.value()),
                 'sample_rate': float(sample_rate_text),
-                'hold_position': self.hold_position_checkbox.isChecked()
+                'hold_position': self.hold_position_checkbox.isChecked(),
+                'spoofing_detection': self.spoofing_detection_checkbox.isChecked()
             }
         }
     
@@ -383,6 +412,9 @@ class SettingsDialog(QDialog):
             
             hold_position = params.get('hold_position', False)
             self.hold_position_checkbox.setChecked(hold_position)
+            
+            spoofing_detection = params.get('spoofing_detection', False)
+            self.spoofing_detection_checkbox.setChecked(spoofing_detection)
             
             frequency = params.get('frequency', 1575.42)
             sample_rate = params.get('sample_rate', 2.048)

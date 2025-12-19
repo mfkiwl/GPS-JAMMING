@@ -1,11 +1,7 @@
-
-
 #include "sdr.h"
-
 #define CDIV 32
 #define CMASK 0x1F
 #define CSCALE (1.0 / 32.0)
-
 extern int getfullpath(char *relpath, char *abspath) {
     if (realpath(relpath, abspath) == NULL) {
         SDRPRINTF("error: getfullpath %s\n", relpath);
@@ -17,9 +13,7 @@ extern int getfullpath(char *relpath, char *abspath) {
 extern unsigned long tickgetus(void) {
     struct timespec tp = {0};
     struct timeval tv = {0};
-
 #ifdef CLOCK_MONOTONIC_RAW
-
     if (!clock_gettime(CLOCK_MONOTONIC_RAW, &tp)) {
         return tp.tv_sec * 1000000UL + tp.tv_nsec / 1000UL;
     } else {
@@ -33,7 +27,6 @@ extern unsigned long tickgetus(void) {
 }
 
 extern double log2(double x) { return log(x) / log(2.0); }
-
 extern int calcfftnum(double x, int next) {
     int nn = (int)(log2(x) + 0.5) + next;
     return (int)pow(2.0, nn);
@@ -42,7 +35,6 @@ extern int calcfftnum(double x, int next) {
 extern void *sdrmalloc(size_t size) {
 #if !defined(SSE2_ENABLE)
     return malloc(size);
-
 #else
     void *p;
     if (posix_memalign(&p, 16, size))
@@ -64,7 +56,6 @@ extern cpx_t *cpxmalloc(int n) {
 }
 
 extern void cpxfree(cpx_t *cpx) { fftwf_free(cpx); }
-
 extern void cpxfft(fftwf_plan plan, cpx_t *cpx, int n) {
 #ifdef FFTMTX
     mlock(hfftmtx);
@@ -103,7 +94,6 @@ extern void cpxcpx(const short *II, const short *QQ, double scale, int n,
                    cpx_t *cpx) {
     float *p = (float *)cpx;
     int i;
-
     for (i = 0; i < n; i++, p += 2) {
         p[0] = II[i] * (float)scale;
         p[1] = QQ ? QQ[i] * (float)scale : 0.0f;
@@ -114,7 +104,6 @@ extern void cpxcpxf(const float *II, const float *QQ, double scale, int n,
                     cpx_t *cpx) {
     float *p = (float *)cpx;
     int i;
-
     for (i = 0; i < n; i++, p += 2) {
         p[0] = II[i] * (float)scale;
         p[1] = QQ ? QQ[i] * (float)scale : 0.0f;
@@ -125,18 +114,14 @@ extern void cpxconv(fftwf_plan plan, fftwf_plan iplan, cpx_t *cpxa, cpx_t *cpxb,
                     int m, int n, int flagsum, double *conv) {
     float *p, *q, real, m2 = (float)m * m;
     int i;
-
     cpxfft(plan, cpxa, m);
-
     for (i = 0, p = (float *)cpxa, q = (float *)cpxb; i < m;
          i++, p += 2, q += 2) {
         real = -p[0] * q[0] - p[1] * q[1];
         p[1] = p[0] * q[1] - p[1] * q[0];
         p[0] = real;
     }
-
     cpxifft(iplan, cpxa, m);
-
     if (flagsum) {
         for (i = 0, p = (float *)cpxa; i < n; i++, p += 2)
             conv[i] += (p[0] * p[0] + p[1] * p[1]) / m2;
@@ -150,9 +135,7 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
                      double *pspec) {
     float *p;
     int i;
-
     cpxfft(plan, cpx, n);
-
     if (flagsum) {
         for (i = 0, p = (float *)cpx; i < n; i++, p += 2)
             pspec[i] += (p[0] * p[0] + p[1] * p[1]);
@@ -163,7 +146,6 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
 }
 
 #if defined(SSE2_ENABLE)
-
 #define MULADD_INT16(xmm, src1, src2)                                          \
     {                                                                          \
         __m128i _x1, _x2;                                                      \
@@ -172,14 +154,12 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         _x2 = _mm_madd_epi16(_x2, _x1);                                        \
         xmm = _mm_add_epi32(xmm, _x2);                                         \
     }
-
 #define SUM_INT32(dst, xmm)                                                    \
     {                                                                          \
         int _sum[4];                                                           \
         _mm_storeu_si128((__m128i *)_sum, xmm);                                \
         dst = _sum[0] + _sum[1] + _sum[2] + _sum[3];                           \
     }
-
 #define EXPAND_INT8(xmm1, xmm2, xmm3, zero)                                    \
     {                                                                          \
         xmm1 = _mm_unpacklo_epi8(zero, xmm3);                                  \
@@ -187,14 +167,12 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         xmm1 = _mm_srai_epi16(xmm1, 8);                                        \
         xmm2 = _mm_srai_epi16(xmm2, 8);                                        \
     }
-
 #define LOAD_INT8(xmm1, xmm2, src, zero)                                       \
     {                                                                          \
         __m128i _x;                                                            \
         _x = _mm_loadu_si128((__m128i *)(src));                                \
         EXPAND_INT8(xmm1, xmm2, _x, zero);                                     \
     }
-
 #define LOAD_INT8C(xmm1, xmm2, src, zero, mask8)                               \
     {                                                                          \
         __m128i _x1, _x2;                                                      \
@@ -204,7 +182,6 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         _x1 = _mm_packus_epi16(_x1, _x2);                                      \
         EXPAND_INT8(xmm1, xmm2, _x1, zero);                                    \
     }
-
 #define MUL_INT16(dst, xmm1, xmm2, xmm3, xmm4)                                 \
     {                                                                          \
         xmm1 = _mm_mullo_epi16(xmm1, xmm3);                                    \
@@ -212,14 +189,12 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         _mm_storeu_si128((__m128i *)(dst), xmm1);                              \
         _mm_storeu_si128((__m128i *)((dst) + 8), xmm2);                        \
     }
-
 #define MUL_INT8(dst, src, xmm1, xmm2, zero)                                   \
     {                                                                          \
         __m128i _x1, _x2;                                                      \
         LOAD_INT8(_x1, _x2, src, zero);                                        \
         MUL_INT16(dst, _x1, _x2, xmm1, xmm2);                                  \
     }
-
 #define DBLTOINT32(xmm, xmm1, xmm2)                                            \
     {                                                                          \
         __m128i _int1, _int2;                                                  \
@@ -228,7 +203,6 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         _int2 = _mm_slli_si128(_int2, 8);                                      \
         xmm = _mm_add_epi32(_int1, _int2);                                     \
     }
-
 #define DBLTOINT16(xmm, xmm1, xmm2, xmm3, xmm4, mask)                          \
     {                                                                          \
         __m128i _int3, _int4;                                                  \
@@ -238,7 +212,6 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         _int4 = _mm_and_si128(_int4, mask);                                    \
         xmm = _mm_packs_epi32(_int3, _int4);                                   \
     }
-
 #define MIX_INT8(dst, xmm1, xmm2, xmm3, index, zero)                           \
     {                                                                          \
         __m128i _x, _x1, _x2;                                                  \
@@ -247,28 +220,22 @@ extern void cpxpspec(fftwf_plan plan, cpx_t *cpx, int n, int flagsum,
         MUL_INT16(dst, _x1, _x2, xmm1, xmm2);                                  \
     }
 #endif
-
 extern void dot_21(const short *a1, const short *a2, const short *b, int n,
                    double *d1, double *d2) {
     const short *p1 = a1, *p2 = a2, *q = b;
-
 #if defined(SSE2_ENABLE)
     __m128i xmm1, xmm2;
-
     n = 8 * (int)ceil((double)n / 8);
     xmm1 = _mm_setzero_si128();
     xmm2 = _mm_setzero_si128();
-
     for (; p1 < a1 + n; p1 += 8, p2 += 8, q += 8) {
         MULADD_INT16(xmm1, p1, q);
         MULADD_INT16(xmm2, p2, q);
     }
     SUM_INT32(d1[0], xmm1);
     SUM_INT32(d2[0], xmm2);
-
 #else
     d1[0] = d2[0] = 0.0;
-
     for (; p1 < a1 + n; p1++, p2++, q++) {
         d1[0] += (*p1) * (*q);
         d2[0] += (*p2) * (*q);
@@ -279,16 +246,13 @@ extern void dot_21(const short *a1, const short *a2, const short *b, int n,
 extern void dot_22(const short *a1, const short *a2, const short *b1,
                    const short *b2, int n, double *d1, double *d2) {
     const short *p1 = a1, *p2 = a2, *q1 = b1, *q2 = b2;
-
 #if defined(SSE2_ENABLE)
     __m128i xmm1, xmm2, xmm3, xmm4;
-
     n = 8 * (int)ceil((double)n / 8);
     xmm1 = _mm_setzero_si128();
     xmm2 = _mm_setzero_si128();
     xmm3 = _mm_setzero_si128();
     xmm4 = _mm_setzero_si128();
-
     for (; p1 < a1 + n; p1 += 8, p2 += 8, q1 += 8, q2 += 8) {
         MULADD_INT16(xmm1, p1, q1);
         MULADD_INT16(xmm2, p1, q2);
@@ -299,10 +263,8 @@ extern void dot_22(const short *a1, const short *a2, const short *b1,
     SUM_INT32(d1[1], xmm2);
     SUM_INT32(d2[0], xmm3);
     SUM_INT32(d2[1], xmm4);
-
 #else
     d1[0] = d1[1] = d2[0] = d2[1] = 0.0;
-
     for (; p1 < a1 + n; p1++, p2++, q1++, q2++) {
         d1[0] += (*p1) * (*q1);
         d1[1] += (*p1) * (*q2);
@@ -316,10 +278,8 @@ extern void dot_23(const short *a1, const short *a2, const short *b1,
                    const short *b2, const short *b3, int n, double *d1,
                    double *d2) {
     const short *p1 = a1, *p2 = a2, *q1 = b1, *q2 = b2, *q3 = b3;
-
 #if defined(SSE2_ENABLE)
     __m128i xmm1, xmm2, xmm3, xmm4, xmm5, xmm6;
-
     n = 8 * (int)ceil((double)n / 8);
     xmm1 = _mm_setzero_si128();
     xmm2 = _mm_setzero_si128();
@@ -327,7 +287,6 @@ extern void dot_23(const short *a1, const short *a2, const short *b1,
     xmm4 = _mm_setzero_si128();
     xmm5 = _mm_setzero_si128();
     xmm6 = _mm_setzero_si128();
-
     for (; p1 < a1 + n; p1 += 8, p2 += 8, q1 += 8, q2 += 8, q3 += 8) {
         MULADD_INT16(xmm1, p1, q1);
         MULADD_INT16(xmm2, p1, q2);
@@ -342,10 +301,8 @@ extern void dot_23(const short *a1, const short *a2, const short *b1,
     SUM_INT32(d2[0], xmm4);
     SUM_INT32(d2[1], xmm5);
     SUM_INT32(d2[2], xmm6);
-
 #else
     d1[0] = d1[1] = d1[2] = d2[0] = d2[1] = d2[2] = 0.0;
-
     for (; p1 < a1 + n; p1++, p2++, q1++, q2++, q3++) {
         d1[0] += (*p1) * (*q1);
         d1[1] += (*p1) * (*q2);
@@ -453,7 +410,6 @@ extern double interp1(double *x, double *y, int n, double t) {
         z = (y[0] * (t - x[1]) - y[1] * (t - x[0])) / (x[0] - x[1]);
         return (z);
     }
-
     xx = (double *)malloc(sizeof(double) * n);
     yy = (double *)malloc(sizeof(double) * n);
     if (x[0] > x[n - 1]) {
@@ -465,7 +421,6 @@ extern double interp1(double *x, double *y, int n, double t) {
         memcpy(xx, x, sizeof(double) * n);
         memcpy(yy, y, sizeof(double) * n);
     }
-
     if (t <= xx[1]) {
         k = 0;
         m = 2;
@@ -497,7 +452,6 @@ extern double interp1(double *x, double *y, int n, double t) {
                 s = s * (t - xx[j]) / (xx[i] - xx[j]);
         z = z + s * yy[i];
     }
-
     free(xx);
     free(yy);
     return z;
@@ -527,30 +481,24 @@ extern void shiftdata(void *dst, void *src, size_t size, int n) {
 extern double rescode(const short *code, int len, double coff, int smax,
                       double ci, int n, short *rcode) {
     short *p;
-
 #if !defined(SSE2_ENABLE)
     coff -= smax * ci;
     coff -= floor(coff / len) * len;
-
     for (p = rcode; p < rcode + n + 2 * smax; p++, coff += ci) {
         if (coff >= len)
             coff -= len;
         *p = code[(int)coff];
     }
     return coff - smax * ci;
-
 #else
     int i, index[4], x[4], nbit, scale;
     __m128i xmm1, xmm2, xmm3, xmm4, xmm5;
-
     coff -= smax * ci;
     coff -= floor(coff / len) * len;
-
     for (i = len, nbit = 31; i; i >>= 1, nbit--)
         ;
     nbit -= 1;
     scale = 1 << nbit;
-
     for (i = 0; i < 4; i++, coff += ci) {
         x[i] = (int)(coff * scale + 0.5);
     }
@@ -558,9 +506,7 @@ extern double rescode(const short *code, int len, double coff, int smax,
     xmm2 = _mm_set1_epi32(len * scale - 1);
     xmm3 = _mm_set1_epi32(len * scale);
     xmm4 = _mm_set1_epi32((int)(ci * 4 * scale + 0.5));
-
     for (p = rcode; p < rcode + n + 2 * smax; p += 4) {
-
         xmm5 = _mm_cmpgt_epi32(xmm1, xmm2);
         xmm5 = _mm_and_si128(xmm5, xmm3);
         xmm1 = _mm_sub_epi32(xmm1, xmm5);
@@ -582,11 +528,9 @@ extern double mixcarr(const char *data, int dtype, double ti, int n,
                       double freq, double phi0, short *II, short *QQ) {
     const char *p;
     double phi, ps, prem;
-
 #if !defined(SSE2_ENABLE)
     static short cost[CDIV] = {0}, sint[CDIV] = {0};
     int i, index;
-
     if (!cost[0]) {
         for (i = 0; i < CDIV; i++) {
             cost[i] = (short)floor((cos(DPI / CDIV * i) / CSCALE + 0.5));
@@ -595,7 +539,6 @@ extern double mixcarr(const char *data, int dtype, double ti, int n,
     }
     phi = phi0 * CDIV / DPI;
     ps = freq * CDIV * ti;
-
     if (dtype == DTYPEIQ) {
         for (p = data; p < data + n * 2; p += 2, II++, QQ++, phi += ps) {
             index = ((int)phi) & CMASK;
@@ -623,7 +566,6 @@ extern double mixcarr(const char *data, int dtype, double ti, int n,
     __m128i zero = _mm_setzero_si128();
     __m128i mask4 = _mm_set1_epi32(15);
     __m128i mask8 = _mm_set1_epi16(255);
-
     if (!cost[0]) {
         for (i = 0; i < 16; i++) {
             cost[i] = (char)floor((cos(DPI / 16 * i) / CSCALE + 0.5));
@@ -651,12 +593,10 @@ extern double mixcarr(const char *data, int dtype, double ti, int n,
     xmm9 = _mm_set1_pd(ps * 16);
     xcos = _mm_loadu_si128((__m128i *)cost);
     xsin = _mm_loadu_si128((__m128i *)sint);
-
     if (dtype == DTYPEIQ) {
         for (p = data; p < data + n * 2; p += 32, II += 16, QQ += 16) {
             LOAD_INT8C(dat1, dat2, p, zero, mask8);
             LOAD_INT8C(dat3, dat4, p + 16, zero, mask8);
-
             DBLTOINT16(ind1, xmm1, xmm2, xmm3, xmm4, mask4);
             DBLTOINT16(ind2, xmm5, xmm6, xmm7, xmm8, mask4);
             ind1 = _mm_packus_epi16(ind1, ind2);
@@ -681,7 +621,6 @@ extern double mixcarr(const char *data, int dtype, double ti, int n,
     if (dtype == DTYPEI) {
         for (p = data; p < data + n; p += 16, II += 16, QQ += 16) {
             LOAD_INT8(dat1, dat2, p, zero);
-
             DBLTOINT16(ind1, xmm1, xmm2, xmm3, xmm4, mask4);
             DBLTOINT16(ind2, xmm5, xmm6, xmm7, xmm8, mask4);
             ind1 = _mm_packus_epi16(ind1, ind2);
@@ -711,7 +650,6 @@ extern void correlator(const char *data, int dtype, double ti, int n,
     short *dataI = NULL, *dataQ = NULL, *code_e = NULL, *code;
     int i;
     int smax = s[ns - 1];
-
     if (!(dataI = (short *)sdrmalloc(sizeof(short) * (n + 64))) ||
         !(dataQ = (short *)sdrmalloc(sizeof(short) * (n + 64))) ||
         !(code_e = (short *)sdrmalloc(sizeof(short) * (n + 2 * smax)))) {
@@ -719,11 +657,8 @@ extern void correlator(const char *data, int dtype, double ti, int n,
         return;
     }
     code = code_e + smax;
-
     *remp = mixcarr(data, dtype, ti, n, freq, phi0, dataI, dataQ);
-
     *remc = rescode(codein, coden, coff, smax, ti * crate, n, code_e);
-
     dot_23(dataI, dataQ, code, code - s[0], code + s[0], n, II, QQ);
     for (i = 1; i < ns; i++) {
         dot_22(dataI, dataQ, code - s[i], code + s[i], n, II + 1 + i * 2,
@@ -746,7 +681,6 @@ extern void pcorrelator(const char *data, int dtype, double ti, int n,
     cpx_t *datax;
     short *dataI, *dataQ;
     char *dataR;
-
     if (!(dataR = (char *)sdrmalloc(sizeof(char) * m * dtype)) ||
         !(dataI = (short *)sdrmalloc(sizeof(short) * (m + 64))) ||
         !(dataQ = (short *)sdrmalloc(sizeof(short) * (m + 64))) ||
@@ -754,16 +688,11 @@ extern void pcorrelator(const char *data, int dtype, double ti, int n,
         SDRPRINTF("error: pcorrelator memory allocation\n");
         return;
     }
-
     memset(dataR, 0, m * dtype);
     memcpy(dataR, data, 2 * n * dtype);
-
     for (i = 0; i < nfreq; i++) {
-
         mixcarr(dataR, dtype, ti, m, freq[i], 0.0, dataI, dataQ);
-
         cpxcpx(dataI, dataQ, CSCALE / m, m, datax);
-
         cpxconv(NULL, NULL, datax, codex, m, n, 1, &P[i * n]);
     }
     sdrfree(dataR);
@@ -773,7 +702,6 @@ extern void pcorrelator(const char *data, int dtype, double ti, int n,
 }
 
 extern int leap_seconds(long gps_seconds) {
-
     int leap_table[][4] = {
         {1981, 6, 30, 1},  {1982, 6, 30, 1},  {1983, 6, 30, 1},
         {1985, 6, 30, 1},  {1987, 12, 31, 1}, {1989, 12, 31, 1},
@@ -785,7 +713,6 @@ extern int leap_seconds(long gps_seconds) {
     struct tm gps_time;
     time_t gps_time_seconds = gps_seconds + GPS_EPOCH_SECONDS;
     gmtime_r(&gps_time_seconds, &gps_time);
-
     for (int i = 0; i < sizeof(leap_table) / sizeof(leap_table[0]); i++) {
         if (gps_time.tm_year + 1900 > leap_table[i][0] ||
             (gps_time.tm_year + 1900 == leap_table[i][0] &&
@@ -800,12 +727,8 @@ extern int leap_seconds(long gps_seconds) {
 }
 
 extern time_t gps_to_utc(int gps_week, double gps_tow) {
-
     long gps_seconds = gps_week * 604800 + (long)gps_tow;
-
     int ls = leap_seconds(gps_seconds);
-
     long utc_seconds = gps_seconds + GPS_EPOCH_SECONDS - ls;
-
     return (time_t)utc_seconds;
 }
