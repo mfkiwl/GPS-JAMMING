@@ -1,17 +1,20 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
                              QLabel, QDoubleSpinBox, QSpinBox, 
                              QPushButton, QGroupBox, QGridLayout, QMessageBox, QCheckBox)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 import os
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None, num_files=0, file_paths=None):
+    position_changed = Signal(float, float, float)
+    
+    def __init__(self, parent=None, num_files=0, file_paths=None, config=None):
         super().__init__(parent)
-        self.setWindowTitle("Ustawienia Analizy GPS")
+        self.setWindowTitle("Ustawienia Analizy GPS — GPS Jammer Detection")
         self.setModal(True)
-        self.resize(400, 350)
+        self.resize(550, 500)
         self.num_files = num_files
         self.file_paths = file_paths if file_paths else []
+        self.config = config
         
         self.setStyleSheet("""
         QDialog {
@@ -43,6 +46,43 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
+
+        base_position_group = QGroupBox("Pozycja Anteny 1 (szerokość/długość geograficzna)")
+        base_position_layout = QGridLayout(base_position_group)
+        base_position_layout.setVerticalSpacing(10)
+        base_position_layout.setHorizontalSpacing(10)
+        
+        base_position_layout.addWidget(QLabel("Szerokość [°]"), 0, 0)
+        self.latitude_spin = QDoubleSpinBox()
+        self.latitude_spin.setRange(-90.0, 90.0)
+        self.latitude_spin.setValue(50.061430)
+        self.latitude_spin.setDecimals(6)
+        self.latitude_spin.setSuffix(" °")
+        self.latitude_spin.setStyleSheet(self.get_spinbox_style())
+        self.latitude_spin.valueChanged.connect(self.on_position_changed)
+        base_position_layout.addWidget(self.latitude_spin, 0, 1)
+        
+        base_position_layout.addWidget(QLabel("Długość [°]"), 1, 0)
+        self.longitude_spin = QDoubleSpinBox()
+        self.longitude_spin.setRange(-180.0, 180.0)
+        self.longitude_spin.setValue(19.936580)
+        self.longitude_spin.setDecimals(6)
+        self.longitude_spin.setSuffix(" °")
+        self.longitude_spin.setStyleSheet(self.get_spinbox_style())
+        self.longitude_spin.valueChanged.connect(self.on_position_changed)
+        base_position_layout.addWidget(self.longitude_spin, 1, 1)
+        
+        base_position_layout.addWidget(QLabel("Wysokość [m]"), 2, 0)
+        self.altitude_spin = QDoubleSpinBox()
+        self.altitude_spin.setRange(-500.0, 10000.0)
+        self.altitude_spin.setValue(0.00)
+        self.altitude_spin.setDecimals(2)
+        self.altitude_spin.setSuffix(" m")
+        self.altitude_spin.setStyleSheet(self.get_spinbox_style())
+        self.altitude_spin.valueChanged.connect(self.on_position_changed)
+        base_position_layout.addWidget(self.altitude_spin, 2, 1)
+        
+        layout.addWidget(base_position_group)
 
         antenna_group = QGroupBox("Pozycje anten względem Anteny 1 [metry]")
         antenna_layout = QGridLayout(antenna_group)
@@ -108,16 +148,7 @@ class SettingsDialog(QDialog):
         self.sample_rate_label = QLabel("2.048 MHz")
         analysis_layout.addWidget(self.sample_rate_label, 1, 1)
 
-        analysis_layout.addWidget(QLabel("Próg Detekcji (względny):"), 2, 0)
-        self.threshold = QDoubleSpinBox()
-        self.threshold.setRange(1.0, 5000.0)
-        self.threshold.setValue(120.0)
-        self.threshold.setDecimals(1)
-        self.threshold.setSingleStep(1.0)
-        self.threshold.setStyleSheet(self.get_spinbox_style())
-        analysis_layout.addWidget(self.threshold, 2, 1)
-        
-        analysis_layout.addWidget(QLabel("Utrzymuj pozycję:"), 3, 0)
+        analysis_layout.addWidget(QLabel("Utrzymuj pozycję:"), 2, 0)
         self.hold_position_checkbox = QCheckBox()
         self.hold_position_checkbox.setChecked(False)
         self.hold_position_checkbox.setStyleSheet("""
@@ -143,9 +174,9 @@ class SettingsDialog(QDialog):
             font-weight: bold;
         }
         """)
-        analysis_layout.addWidget(self.hold_position_checkbox, 3, 1)
+        analysis_layout.addWidget(self.hold_position_checkbox, 2, 1)
         
-        analysis_layout.addWidget(QLabel("Wykrywanie Spoofingu:"), 4, 0)
+        analysis_layout.addWidget(QLabel("Wykrywanie Spoofingu:"), 3, 0)
         self.spoofing_detection_checkbox = QCheckBox()
         self.spoofing_detection_checkbox.setChecked(False)
         self.spoofing_detection_checkbox.setStyleSheet("""
@@ -171,30 +202,7 @@ class SettingsDialog(QDialog):
             font-weight: bold;
         }
         """)
-        analysis_layout.addWidget(self.spoofing_detection_checkbox, 4, 1)
-        
-        self.calibrate_btn = QPushButton("Oblicz próg")
-        self.calibrate_btn.clicked.connect(self.on_calibrate_clicked)
-        self.calibrate_btn.setStyleSheet("""
-        QPushButton {
-            background-color: #3498db;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 13px;
-            font-weight: bold;
-            margin-top: 10px;
-        }
-        QPushButton:hover {
-            background-color: #2980b9;
-            box-shadow: 0 3px 6px rgba(0,0,0,0.2);
-        }
-        QPushButton:pressed {
-            background-color: #21618c;
-        }
-        """)
-        analysis_layout.addWidget(self.calibrate_btn, 5, 0, 1, 2)
+        analysis_layout.addWidget(self.spoofing_detection_checkbox, 3, 1)
         
         layout.addWidget(analysis_group)
         
@@ -248,50 +256,23 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(self.ok_btn)
         
         layout.addLayout(button_layout)
+        
+        if self.config:
+            self.load_from_config()
     
-    def on_calibrate_clicked(self):
-        if self.num_files == 0:
-            QMessageBox.warning(self, "Brak plików", "Brak plików do kalibracji")
-        elif self.num_files >= 1:
-            import subprocess
-            import re
-            
-            first_file = self.file_paths[0]
-            script_path = os.path.join(os.path.dirname(__file__), 'checkIfJamming.py')
-            
-            try:
-                result = subprocess.run(
-                    ['python', script_path, first_file, '--kalibruj'],
-                    capture_output=True,
-                    text=True,
-                    timeout=120
-                )
-                
-                output = result.stdout
-                print(output)
-                
-                match = re.search(r'Sugerowany <próg_mocy> \(Mediana \* 4\.8\):\s*([\d.]+)', output)
-                
-                if match:
-                    suggested_threshold = float(match.group(1))
-                    self.threshold.setValue(suggested_threshold)
-                    QMessageBox.information(
-                        self, 
-                        "Kalibracja zakończona", 
-                        f"Obliczony próg detekcji: {suggested_threshold:.2f}\n\n"
-                        f"Wartość została automatycznie wpisana."
-                    )
-                else:
-                    QMessageBox.warning(
-                        self, 
-                        "Błąd kalibracji", 
-                        "Nie udało się odczytać wartości progu z wyniku kalibracji."
-                    )
-                    
-            except subprocess.TimeoutExpired:
-                QMessageBox.critical(self, "Błąd", "Kalibracja przekroczyła limit czasu (120s)")
-            except Exception as e:
-                QMessageBox.critical(self, "Błąd", f"Błąd podczas kalibracji:\n{str(e)}")
+    def on_position_changed(self):
+        lat = self.latitude_spin.value()
+        lon = self.longitude_spin.value()
+        alt = self.altitude_spin.value()
+        self.position_changed.emit(lat, lon, alt)
+    
+    def load_from_config(self):
+        if hasattr(self.config, 'LAT'):
+            self.latitude_spin.setValue(self.config.LAT)
+        if hasattr(self.config, 'LNG'):
+            self.longitude_spin.setValue(self.config.LNG)
+        if hasattr(self.config, 'ALT'):
+            self.altitude_spin.setValue(self.config.ALT)
     
     def update_antenna_state(self):
         disabled_label_style = "color: #95a5a6;"
@@ -379,6 +360,11 @@ class SettingsDialog(QDialog):
         sample_rate_text = self.sample_rate_label.text().replace(' MHz', '')
         
         return {
+            'base_position': {
+                'latitude': self.latitude_spin.value(),
+                'longitude': self.longitude_spin.value(),
+                'altitude': self.altitude_spin.value()
+            },
             'antenna_positions': antenna_positions,
             'antenna_distances': {
                 '1_to_2': distance_12,
@@ -387,7 +373,6 @@ class SettingsDialog(QDialog):
             },
             'analysis_params': {
                 'frequency': float(frequency_text),
-                'threshold': int(self.threshold.value()),
                 'sample_rate': float(sample_rate_text),
                 'hold_position': self.hold_position_checkbox.isChecked(),
                 'spoofing_detection': self.spoofing_detection_checkbox.isChecked()
@@ -395,6 +380,12 @@ class SettingsDialog(QDialog):
         }
     
     def set_settings(self, settings):
+        if 'base_position' in settings:
+            base_pos = settings['base_position']
+            self.latitude_spin.setValue(base_pos.get('latitude', 50.061430))
+            self.longitude_spin.setValue(base_pos.get('longitude', 19.936580))
+            self.altitude_spin.setValue(base_pos.get('altitude', 0.0))
+        
         if 'antenna_positions' in settings:
             positions = settings['antenna_positions']
             antenna2_pos = positions.get('antenna2', [0.5, 0.0])
@@ -407,8 +398,6 @@ class SettingsDialog(QDialog):
         
         if 'analysis_params' in settings:
             params = settings['analysis_params']
-            threshold_value = params.get('threshold', 30)
-            self.threshold.setValue(float(threshold_value))
             
             hold_position = params.get('hold_position', False)
             self.hold_position_checkbox.setChecked(hold_position)

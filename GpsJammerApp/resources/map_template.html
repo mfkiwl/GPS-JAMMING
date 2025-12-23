@@ -98,6 +98,9 @@
     
     let liveMarker = null;
     let livePolyline = null;
+    let basePositionMarker = null;
+    let antennaMarkers = [];
+    let distanceCircles = [];
 
     function clearSignalMarkers() {{
       signalMarkers.forEach(marker => map.removeLayer(marker));

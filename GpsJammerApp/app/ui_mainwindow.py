@@ -88,6 +88,11 @@ class MainWindow(QMainWindow):
                 '1_to_3': 0.5,
                 '2_to_3': 0.707
             },
+            'base_position': {
+                'latitude': config.LAT,
+                'longitude': config.LNG,
+                'altitude': getattr(config, 'ALT', 0.0)
+            },
             'analysis_params': {
                 'frequency': 1575.42,
                 'threshold': 120,
@@ -100,7 +105,7 @@ class MainWindow(QMainWindow):
     def update_satellite_system_display(self):
         params = self.satellite_params[self.selected_satellite_system]
         message = (
-            f"🛰️ Wybrano system satelitarny: {self.selected_satellite_system}\n"
+            f"Wybrano system satelitarny: {self.selected_satellite_system}\n"
             f"   Ustawienia dla {params['band']}\n"
             f"   Częstotliwość: {params['frequency']:.2f} MHz\n"
             f"   Częstotliwość próbkowania: {params['sample_rate']:.3f} MHz"
@@ -377,20 +382,20 @@ class MainWindow(QMainWindow):
         satellite_system_group.setStyleSheet(group_style)
         satellite_system_layout = QHBoxLayout(satellite_system_group)
         
-        self.gps_btn = QPushButton("🇺🇸 GPS")
+        self.gps_btn = QPushButton("GPS")
         self.gps_btn.setCheckable(True)
         self.gps_btn.setChecked(True)
         self.gps_btn.clicked.connect(lambda: self.select_satellite_system('GPS'))
         self.gps_btn.setStyleSheet(gps_button_style)
         satellite_system_layout.addWidget(self.gps_btn)
 
-        self.glonass_btn = QPushButton("🇷🇺 GLONASS")
+        self.glonass_btn = QPushButton("GLONASS")
         self.glonass_btn.setCheckable(True)
         self.glonass_btn.clicked.connect(lambda: self.select_satellite_system('GLONASS'))
         self.glonass_btn.setStyleSheet(glonass_button_style)
         satellite_system_layout.addWidget(self.glonass_btn)
         
-        self.galileo_btn = QPushButton("🇪🇺 Galileo")
+        self.galileo_btn = QPushButton("Galileo")
         self.galileo_btn.setCheckable(True)
         self.galileo_btn.clicked.connect(lambda: self.select_satellite_system('Galileo'))
         self.galileo_btn.setStyleSheet(galileo_button_style)
@@ -423,16 +428,16 @@ class MainWindow(QMainWindow):
         """)
         analysis_layout.addWidget(self.file_display)
         
-        self.browse_btn = QPushButton("📁 Wybierz pliki (maks. 3)") 
+        self.browse_btn = QPushButton("Wybierz pliki (maks. 3)") 
         self.browse_btn.clicked.connect(self.browse_files) 
         self.browse_btn.setStyleSheet(button_style)
         analysis_layout.addWidget(self.browse_btn)
-        self.settings_btn = QPushButton("⚙️ Ustawienia")
+        self.settings_btn = QPushButton("Ustawienia")
         self.settings_btn.clicked.connect(self.open_settings)
         self.settings_btn.setStyleSheet(button_style)
         analysis_layout.addWidget(self.settings_btn)
 
-        self.analyze_btn = QPushButton("🔍 Rozpocznij Analizę")
+        self.analyze_btn = QPushButton("Rozpocznij Analizę")
         self.analyze_btn.clicked.connect(self.start_analysis)
         self.analyze_btn.setStyleSheet(action_button_style)
         stop_button_style = """
@@ -462,7 +467,7 @@ class MainWindow(QMainWindow):
         }
         """
         
-        self.stop_btn = QPushButton("⏹️ Stop")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.clicked.connect(self.stop_analysis)
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet(stop_button_style)
@@ -529,7 +534,7 @@ class MainWindow(QMainWindow):
         sim_group.setStyleSheet(group_style)
         sim_layout = QVBoxLayout(sim_group)
         
-        self.run_simulation_btn = QPushButton("⚙️ Wygeneruj pliki symulacyjne")
+        self.run_simulation_btn = QPushButton("Wygeneruj pliki symulacyjne")
         self.run_simulation_btn.clicked.connect(self.run_simulation_script) 
         self.run_simulation_btn.setStyleSheet(test_button_style)
         sim_layout.addWidget(self.run_simulation_btn)
@@ -598,34 +603,56 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         try:
             from .settings_dialog import SettingsDialog
+            from . import config
+            
             num_files = len(self.current_files) if hasattr(self, 'current_files') else 0
             file_paths = self.current_files if hasattr(self, 'current_files') else []
-            dialog = SettingsDialog(self, num_files=num_files, file_paths=file_paths)
+            
+            dialog = SettingsDialog(self, num_files=num_files, file_paths=file_paths, config=config)
+            
+            dialog.position_changed.connect(self.update_map_center)
 
             dialog.set_settings(self.current_settings)
             
             if dialog.exec():
                 settings = dialog.get_settings()
                 self.apply_settings(settings)
+                
+                if 'base_position' in settings:
+                    base_pos = settings['base_position']
+                    config.LAT = base_pos['latitude']
+                    config.LNG = base_pos['longitude']
+                    if not hasattr(config, 'ALT'):
+                        config.ALT = base_pos['altitude']
+                    else:
+                        config.ALT = base_pos['altitude']
+                
                 print(f"Nowe ustawienia: {settings}")
 
                 positions = settings['antenna_positions']
                 distances = settings['antenna_distances']
-                hold_position_status = "✅ WŁĄCZONE" if settings['analysis_params'].get('hold_position', False) else "❌ WYŁĄCZONE"
+                base_pos = settings.get('base_position', {})
+                hold_position_status = "WLACZONE" if settings['analysis_params'].get('hold_position', False) else "WYLACZONE"
+                spoofing_status = "WLACZONE" if settings['analysis_params'].get('spoofing_detection', False) else "WYLACZONE"
                 
                 info_text = (
-                    f"⚙️ USTAWIENIA ZAKTUALIZOWANE:\n"
+                    f"USTAWIENIA ZAKTUALIZOWANE:\n"
+                    f"Pozycja bazowa:\n"
+                    f"   Szerokosc: {base_pos.get('latitude', 0):.6f}°\n"
+                    f"   Dlugosc: {base_pos.get('longitude', 0):.6f}°\n"
+                    f"   Wysokosc: {base_pos.get('altitude', 0):.2f} m\n"
                     f"Pozycje anten:\n"
                     f"   Antena 1: (0.0, 0.0) m [ref]\n"
                     f"   Antena 2: ({positions['antenna2'][0]:.3f}, {positions['antenna2'][1]:.3f}) m\n"
                     f"   Antena 3: ({positions['antenna3'][0]:.3f}, {positions['antenna3'][1]:.3f}) m\n"
-                    f"Parametry: {settings['analysis_params']['frequency']:.2f} MHz, próg {settings['analysis_params']['threshold']}\n"
-                    f"📍 Utrzymuj pozycję: {hold_position_status}"
+                    f"Parametry: {settings['analysis_params']['frequency']:.2f} MHz\n"
+                    f"Utrzymuj pozycje: {hold_position_status}\n"
+                    f"Wykrywanie Spoofingu: {spoofing_status}"
                 )
                 
                 self.results_text.setPlainText(info_text)
         except ImportError as e:
-            self.results_text.setPlainText(f"Błąd importu okna ustawień: {e}")
+            self.results_text.setPlainText(f"Blad importu okna ustawien: {e}")
     
     def apply_settings(self, settings):
         self.current_settings = settings
@@ -663,6 +690,9 @@ class MainWindow(QMainWindow):
         self.clear_markers_silently()
         self.jammer_shown = False
         
+        # Wyświetl pozycje odbiorników przed rozpoczęciem analizy
+        self.display_antenna_positions()
+        
         self.web_view.page().runJavaScript("hideSpoofingAlert();")
         self.web_view.page().runJavaScript("hideJammingAlert();")
         self.analyze_btn.setEnabled(False)
@@ -678,19 +708,20 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         
-        hold_position_status = "✅ WŁĄCZONE" if self.current_settings['analysis_params'].get('hold_position', False) else "❌ WYŁĄCZONE"
-        spoofing_detection_status = "✅ WŁĄCZONE" if self.current_settings['analysis_params'].get('spoofing_detection', False) else "❌ WYŁĄCZONE"
+        hold_position_status = "WŁĄCZONE" if self.current_settings['analysis_params'].get('hold_position', False) else "WYŁĄCZONE"
+        spoofing_detection_status = "WŁĄCZONE" if self.current_settings['analysis_params'].get('spoofing_detection', False) else "WYŁĄCZONE"
         self.results_text.setPlainText(
             f"Rozpoczynam analizę {len(self.current_files)} plik(ów)...\n"
-            f"🛰️ System satelitarny: {self.selected_satellite_system}\n"
-            f"📍 Utrzymuj pozycję: {hold_position_status}\n"
-            f"🔍 Wykrywanie spoofingu: {spoofing_detection_status}\n"
+            f"System satelitarny: {self.selected_satellite_system}\n"
+            f"Utrzymuj pozycję: {hold_position_status}\n"
+            f"Wykrywanie spoofingu: {spoofing_detection_status}\n"
         )
         
         self.analysis_thread = GPSAnalysisThread(
             self.current_files, 
             power_threshold=self.current_settings['analysis_params'].get('threshold', 120.0),
             antenna_positions=self.current_settings.get('antenna_positions'),
+            base_position=self.current_settings.get('base_position'),
             satellite_system=self.selected_satellite_system,
             hold_position=self.current_settings['analysis_params'].get('hold_position', False),
             enable_spoofing_detection=self.current_settings['analysis_params'].get('spoofing_detection', False)
@@ -723,9 +754,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(value)
 
         if state == "jamming":
-            self.progress_bar.setFormat("🚨 Znaleziono zakłócenia, analizowanie...")
+            self.progress_bar.setFormat("Znaleziono zakłócenia, analizowanie...")
         elif state == "triangulating":
-            self.progress_bar.setFormat("📐 Triangulacja - obliczanie lokalizacji jammera...")
+            self.progress_bar.setFormat("Triangulacja - obliczanie lokalizacji jammera...")
         elif state == "completed":
             self.progress_bar.setFormat("Analiza zakończona - 100%")
 
@@ -742,6 +773,86 @@ class MainWindow(QMainWindow):
             self.progress_bar.setFormat(f"Analiza: {value}%")
         else:
             self.progress_bar.setFormat("Przygotowanie analizy...")
+        
+    def update_map_center(self, lat, lon, alt):
+        # Wyczyść poprzedni marker pozycji bazowej (jeśli istnieje)
+        js_clear_base = """
+        if (typeof basePositionMarker !== 'undefined' && basePositionMarker) {
+            map.removeLayer(basePositionMarker);
+            basePositionMarker = null;
+        }
+        """
+        self.web_view.page().runJavaScript(js_clear_base)
+        
+        # Dodaj nowy marker pozycji bazowej
+        js_add_base = f"""
+        basePositionMarker = L.marker([{lat:.8f}, {lon:.8f}], {{
+            icon: L.icon({{
+                iconUrl: 'data:image/svg+xml;charset=UTF-8,%3Csvg xmlns="http://www.w3.org/2000/svg" width="32" height="32"%3E%3Ccircle cx="16" cy="16" r="12" fill="%233498db" stroke="white" stroke-width="2"/%3E%3Ccircle cx="16" cy="16" r="4" fill="white"/%3E%3C/svg%3E',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            }})
+        }}).addTo(map);
+        basePositionMarker.bindPopup('<b>Pozycja Bazowa (Antena 1)</b><br>Szerokość: {lat:.8f}°<br>Długość: {lon:.8f}°<br>Wysokość: {alt:.2f} m').openPopup();
+        
+        map.setView([{lat:.8f}, {lon:.8f}], map.getZoom());
+        """
+        self.web_view.page().runJavaScript(js_add_base)
+        
+        print(f"Zaktualizowano pozycję bazową na mapie: {lat:.6f}, {lon:.6f}, wysokość: {alt:.2f}m")
+    
+    def display_antenna_positions(self):
+        """Wyświetla pozycje wszystkich anten/odbiorników na mapie"""
+        from . import config
+        
+        # Pobierz pozycję bazową
+        base_lat = config.LAT
+        base_lon = config.LNG
+        base_alt = getattr(config, 'ALT', 0.0)
+        
+        # Wyczyść poprzednie markery anten
+        js_clear_antennas = """
+        if (typeof antennaMarkers !== 'undefined' && antennaMarkers) {
+            antennaMarkers.forEach(marker => map.removeLayer(marker));
+        }
+        antennaMarkers = [];
+        """
+        self.web_view.page().runJavaScript(js_clear_antennas)
+        
+        # Pobierz pozycje anten z ustawień
+        settings_positions = self.current_settings.get('antenna_positions', {})
+        antenna_positions = [
+            ('Antena 1 (Referencyjna)', settings_positions.get('antenna1', [0.0, 0.0]), '#3498db'),
+            ('Antena 2', settings_positions.get('antenna2', [0.5, 0.0]), '#3498db'),
+            ('Antena 3', settings_positions.get('antenna3', [0.0, 0.5]), '#3498db')
+        ]
+        
+        # Wyświetl tylko tyle anten ile mamy plików
+        num_antennas = len(self.current_files) if hasattr(self, 'current_files') else 1
+        
+        for i, (name, ant_pos, color) in enumerate(antenna_positions[:num_antennas]):
+            # Przelicz pozycję lokalną na współrzędne geograficzne
+            lat_offset = ant_pos[1] / 111320.0  # metry na stopnie szerokości
+            lon_offset = ant_pos[0] / (111320.0 * abs(base_lat / 90.0) if base_lat != 0 else 111320.0)
+            antenna_lat = base_lat + lat_offset
+            antenna_lon = base_lon + lon_offset
+            
+            js_add_antenna = f"""
+            var antennaMarker{i} = L.circleMarker([{antenna_lat:.8f}, {antenna_lon:.8f}], {{
+                radius: 8,
+                fillColor: '{color}',
+                color: 'white',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.9
+            }}).addTo(map);
+            antennaMarker{i}.bindPopup('<b>{name}</b><br>Pozycja lokalna: ({ant_pos[0]:.2f}m, {ant_pos[1]:.2f}m)<br>Szerokość: {antenna_lat:.8f}°<br>Długość: {antenna_lon:.8f}°');
+            if (typeof antennaMarkers === 'undefined') antennaMarkers = [];
+            antennaMarkers.push(antennaMarker{i});
+            """
+            self.web_view.page().runJavaScript(js_add_antenna)
+        
+        print(f"[UI] Wyświetlono {num_antennas} pozycji anten na mapie")
         
     def update_map_position(self, lat, lon):
         if not self.is_map_centered:
@@ -769,41 +880,55 @@ class MainWindow(QMainWindow):
             
             js_add_jammer = f"""
             var jammerMarker = L.marker([{geo['lat']}, {geo['lon']}], {{
-                icon: L.icon({{
-                    iconUrl: 'data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="red" stroke="darkred" stroke-width="2"/><text x="12" y="16" text-anchor="middle" fill="white" font-size="10" font-weight="bold">JAM</text></svg>', 
-                    iconSize: [20, 20],
-                    iconAnchor: [8, 8]
+                icon: L.divIcon({{
+                    className: 'jammer-icon',
+                    html: '<div style="background-color: #e74c3c; border: 3px solid #c0392b; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;"><span style="color: white; font-weight: bold; font-size: 11px;">JAM</span></div>',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
                 }})
             }}).addTo(map);
-            jammerMarker.bindPopup('POZYCJA JAMMERA<br/>Lat: {geo['lat']:.8f}N<br/>Lon: {geo['lon']:.8f}E<br/>Wykryty triangulacja');
+            jammerMarker.bindPopup('<b>POZYCJA JAMMERA</b><br/>Lat: {geo['lat']:.8f}N<br/>Lon: {geo['lon']:.8f}E<br/>Wykryty triangulacją');
             
             // Wyśrodkuj mapę na pozycji jammera
             map.setView([{geo['lat']}, {geo['lon']}], 18);
             """
             self.web_view.page().runJavaScript(js_add_jammer)
+            print(f"[UI] Dodano marker jammera na pozycji: {geo['lat']:.8f}, {geo['lon']:.8f}")
+            
             if hasattr(self, 'current_files') and len(self.current_files) >= 2:
                 settings_positions = self.current_settings.get('antenna_positions', {})
                 antenna_positions = [
                     settings_positions.get('antenna1', [0.0, 0.0]),
                     settings_positions.get('antenna2', [0.5, 0.0]),
-                    settings_positions.get('antenna3', [0.0, 0.5]) if len(self.current_files) == 3 else None
+                    settings_positions.get('antenna3', [0.0, 0.5])
                 ]
+                
+                colors = ['#e74c3c', '#e74c3c', '#e74c3c']
 
-                for i, (ant_pos, distance) in enumerate(zip(antenna_positions, distances)):
+                num_antennas = len(self.current_files)
+                
+                for i in range(min(num_antennas, len(antenna_positions), len(distances))):
+                    ant_pos = antenna_positions[i]
+                    distance = distances[i]
+                    
                     if ant_pos is not None and distance is not None:
+                        # Przelicz pozycję lokalną na współrzędne geograficzne (tak samo jak w display_antenna_positions)
                         lat_offset = ant_pos[1] / 111320.0  
-                        lon_offset = ant_pos[0] / (111320.0 * abs(ref_lat / 90.0)) 
+                        lon_offset = ant_pos[0] / (111320.0 * abs(ref_lat / 90.0) if ref_lat != 0 else 111320.0) 
                         antenna_lat = ref_lat + lat_offset
                         antenna_lon = ref_lon + lon_offset
+                        
+                        print(f"[UI] Live triangulacja - rysowanie okręgu od anteny {i+1}: pozycja ({antenna_lat:.8f}, {antenna_lon:.8f}), promień {distance:.1f}m")
 
                         js_add_circle = f"""
-                        var circle{i} = L.circle([{antenna_lat}, {antenna_lon}], {{
-                            color: 'red',
-                            fillColor: 'rgba(255, 0, 0, 0.1)',
-                            fillOpacity: 0.4,
-                            radius: {distance}
+                        var circle{i} = L.circle([{antenna_lat:.8f}, {antenna_lon:.8f}], {{
+                            color: '{colors[i]}',
+                            fillColor: '{colors[i]}',
+                            fillOpacity: 0.1,
+                            radius: {distance},
+                            weight: 2
                         }}).addTo(map);
-                        circle{i}.bindPopup('Antena {i+1}<br/>Szacowana odległość {distance:.1f}m');
+                        circle{i}.bindPopup('<b>Antena {i+1}</b><br/>Szacowana odległość do jammera: {distance:.1f}m');
                         """
                         self.web_view.page().runJavaScript(js_add_circle)
 
@@ -846,7 +971,7 @@ class MainWindow(QMainWindow):
         sats_text = ', '.join([str(s) for s in suspicious_sats])
         
         spoofing_text = (
-            f"\n🚨 WYKRYTO SPOOFING! [t={timestamp:.2f}s]\n"
+            f"\nWYKRYTO SPOOFING! [t={timestamp:.2f}s]\n"
             f"   Podejrzane satelity: {sats_text}\n"
             f"   Aktywne detektory: {methods_text}\n"
             f"   Wynik detekcji: {detection_score}/{required_score}\n"
@@ -872,14 +997,14 @@ class MainWindow(QMainWindow):
     def stop_analysis(self):
         """Zatrzymuje trwającą analizę"""
         if self.analysis_thread and self.analysis_thread.isRunning():
-            self.results_text.append("\n⏹️ Zatrzymywanie analizy...")
+            self.results_text.append("\nZatrzymywanie analizy...")
             self.analysis_thread.stop_requested = True
             self.analysis_thread.terminate()
             self.analysis_thread.wait(3000)
             if hasattr(self.analysis_thread, 'shutdown_server'):
                 self.analysis_thread.shutdown_server()
             
-            self.results_text.append("✅ Analiza została zatrzymana.")
+            self.results_text.append("Analiza została zatrzymana.")
             self.analyze_btn.setEnabled(True)
             self.browse_btn.setEnabled(True)
             self.settings_btn.setEnabled(True)
@@ -925,19 +1050,26 @@ class MainWindow(QMainWindow):
             first_result = points[0]
             
             if first_result.get('type') == 'jamming':
-                jamming_text = "🚨 Wykryto jamming w pliku!\n\n"
+                jamming_text = "Wykryto jamming w pliku!\n\n"
                 self.results_text.setPlainText(jamming_text)
                 
                 triangulation = first_result.get('triangulation')
-                if triangulation:
+                print(f"[UI] Triangulation result: {triangulation}")
+                
+                if triangulation and triangulation.get('success'):
                     self.display_final_triangulation_result(triangulation)
+                elif triangulation:
+                    error_msg = triangulation.get('message', 'Nieznany błąd')
+                    self.results_text.append(f"\nTriangulacja nieudana: {error_msg}")
+                else:
+                    self.results_text.append("\nBrak danych triangulacji.")
                 
                 return
             
             elif first_result.get('type') == 'no_jamming':
-                self.results_text.setPlainText("✅ Nie wykryto żadnych zakłóceń w sygnale.")
+                self.results_text.setPlainText("Nie wykryto żadnych zakłóceń w sygnale.")
                 triangulation = first_result.get('triangulation')
-                if triangulation:
+                if triangulation and triangulation.get('success'):
                     self.display_final_triangulation_result(triangulation)
                 return
         
@@ -945,11 +1077,85 @@ class MainWindow(QMainWindow):
         if triangulation and triangulation['success']:
             geo = triangulation['location_geographic']
             distances = triangulation['distances']
+            ref_pos = triangulation.get('reference_position')
+            
+            if ref_pos:
+                ref_lat = ref_pos['lat']
+                ref_lon = ref_pos['lon']
+            else:
+                from . import config
+                ref_lat = config.LAT
+                ref_lon = config.LNG
+
+            settings_positions = self.current_settings.get('antenna_positions', {})
+            antenna_positions = [
+                settings_positions.get('antenna1', [0.0, 0.0]),
+                settings_positions.get('antenna2', [0.5, 0.0]),
+                settings_positions.get('antenna3', [0.0, 0.5])
+            ]
+            
+            colors = ['#e74c3c', '#e74c3c', '#e74c3c']
+            
+            js_clear_circles = """
+            if (typeof distanceCircles !== 'undefined' && distanceCircles) {
+                distanceCircles.forEach(circle => map.removeLayer(circle));
+            }
+            distanceCircles = [];
+            """
+            self.web_view.page().runJavaScript(js_clear_circles)
+
+            num_antennas = len(self.current_files) if hasattr(self, 'current_files') else len(distances)
+            
+            for i in range(min(num_antennas, len(antenna_positions), len(distances))):
+                ant_pos = antenna_positions[i]
+                distance = distances[i]
+                
+                if ant_pos is not None and distance is not None:
+                    lat_offset = ant_pos[1] / 111320.0
+                    lon_offset = ant_pos[0] / (111320.0 * abs(ref_lat / 90.0) if ref_lat != 0 else 111320.0)
+                    antenna_lat = ref_lat + lat_offset
+                    antenna_lon = ref_lon + lon_offset
+                    
+                    print(f"[UI] Rysowanie okręgu od anteny {i+1}: pozycja ({antenna_lat:.8f}, {antenna_lon:.8f}), promień {distance:.1f}m")
+                    
+                    js_add_circle = f"""
+                    var circle{i} = L.circle([{antenna_lat:.8f}, {antenna_lon:.8f}], {{
+                        color: '{colors[i]}',
+                        fillColor: '{colors[i]}',
+                        fillOpacity: 0.1,
+                        radius: {distance},
+                        weight: 2
+                    }}).addTo(map);
+                    circle{i}.bindPopup('<b>Antena {i+1}</b><br/>Szacowana odległość do jammera: {distance:.1f}m');
+                    if (typeof distanceCircles === 'undefined') distanceCircles = [];
+                    distanceCircles.push(circle{i});
+                    """
+                    self.web_view.page().runJavaScript(js_add_circle)
+            
+            js_add_jammer = f"""
+            var jammerMarker = L.marker([{geo['lat']}, {geo['lon']}], {{
+                icon: L.divIcon({{
+                    className: 'jammer-icon',
+                    html: '<div style="background-color: #e74c3c; border: 3px solid #c0392b; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;"><span style="color: white; font-weight: bold; font-size: 11px;">JAM</span></div>',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                }})
+            }}).addTo(map);
+            jammerMarker.bindPopup('<b>POZYCJA JAMMERA</b><br/>Lat: {geo['lat']:.8f}N<br/>Lon: {geo['lon']:.8f}E<br/>Wykryty triangulacją').openPopup();
+            
+            // Wyśrodkuj mapę na pozycji jammera
+            map.setView([{geo['lat']}, {geo['lon']}], 18);
+            """
+            
+            self.web_view.page().runJavaScript(js_add_jammer)
+            print(f"[UI] Wyświetlono końcowy marker jammera na pozycji: {geo['lat']:.8f}, {geo['lon']:.8f}")
+            
             final_text = (
-                f"Lokalizacja jammera została określona\n"
+                f"\nLokalizacja jammera została określona\n"
                 f"Współrzędne: {geo['lat']:.8f}, {geo['lon']:.8f}\n"
                 f"Metoda: {triangulation['num_antennas']}-antenna triangulation\n"
-                f"Dokładność: ±{max(distances) - min([d for d in distances if d]):.1f}m\n"
+                f"Odległości od anten: {', '.join([f'{d:.1f}m' for d in distances if d is not None])}\n"
+                f"Dokładność: ±{max([d for d in distances if d is not None]) - min([d for d in distances if d is not None]):.1f}m\n"
             )
             
             current_text = self.results_text.toPlainText()
@@ -961,6 +1167,26 @@ class MainWindow(QMainWindow):
 
     def clear_markers_silently(self):
         self.web_view.page().runJavaScript("clearSignalMarkers();")
+        
+        # Wyczyść markery anten
+        js_clear_antennas = """
+        if (typeof antennaMarkers !== 'undefined' && antennaMarkers) {
+            antennaMarkers.forEach(marker => map.removeLayer(marker));
+            antennaMarkers = [];
+        }
+        """
+        self.web_view.page().runJavaScript(js_clear_antennas)
+        
+        # Wyczyść okręgi odległości
+        js_clear_circles = """
+        if (typeof distanceCircles !== 'undefined' && distanceCircles) {
+            distanceCircles.forEach(circle => map.removeLayer(circle));
+            distanceCircles = [];
+        }
+        """
+        self.web_view.page().runJavaScript(js_clear_circles)
+        
+        # Wyczyść pozostałe markery (jammer itp.)
         js_clear_all = """
         map.eachLayer(function(layer) {
             if (layer instanceof L.Marker || layer instanceof L.Circle) {

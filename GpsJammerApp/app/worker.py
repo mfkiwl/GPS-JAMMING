@@ -81,7 +81,7 @@ class GPSAnalysisThread(QThread):
     jamming_detected_realtime = Signal(bool, dict)
     spoofing_detected = Signal(dict)
 
-    def __init__(self, file_paths, power_threshold=6.0, antenna_positions=None, satellite_system='GPS', hold_position=False, enable_spoofing_detection=False):
+    def __init__(self, file_paths, power_threshold=6.0, antenna_positions=None, base_position=None, satellite_system='GPS', hold_position=False, enable_spoofing_detection=False):
         super().__init__()
         self.file_paths = file_paths
         self.enable_spoofing_detection = enable_spoofing_detection
@@ -105,6 +105,12 @@ class GPSAnalysisThread(QThread):
             'antenna1': [0.0, 0.0],
             'antenna2': [0.5, 0.0],
             'antenna3': [0.0, 0.5]
+        }
+        
+        self.base_position = base_position if base_position else {
+            'latitude': 50.06143,
+            'longitude': 19.93658,
+            'altitude': 0.0
         }
         
         self.satellite_system = satellite_system
@@ -707,14 +713,33 @@ class GPSAnalysisThread(QThread):
                 self.jamming_events.append(event_data)
                 
                 # [FIX] Uruchom triangulację, jeśli jest jamming
+                print(f"[WORKER] Wykryto jamming! Liczba plików: {len(self.file_paths)}")
                 print("[WORKER] Uruchamiam triangulację na koniec pliku...")
                 self.analyze_triangulation_after_gnssdec()
                 if self.triangulation_thread:
+                    print("[WORKER] Czekam na zakończenie wątku triangulacji...")
                     self.triangulation_thread.join()
+                    print(f"[WORKER] Triangulacja zakończona. Wynik: {self.triangulation_result}")
+                else:
+                    print("[WORKER] BŁĄD: Wątek triangulacji nie został utworzony!")
+            
+            # WAŻNE: Jeśli mamy eventy jammingu i więcej niż 1 plik, ale triangulacja jeszcze nie została uruchomiona
+            if self.jamming_events and len(self.file_paths) >= 2:
+                if self.triangulation_result is None:
+                    print("[WORKER] Triangulacja nie została uruchomiona wcześniej, uruchamiam teraz...")
+                    self.analyze_triangulation_after_gnssdec()
+                
+                # Czekaj na zakończenie triangulacji
+                if self.triangulation_thread and self.triangulation_thread.is_alive():
+                    print("[WORKER] Czekam na zakończenie triangulacji przed wysłaniem wyniku...")
+                    self.triangulation_thread.join()
+                    print(f"[WORKER] Triangulacja zakończona. Wynik: {self.triangulation_result}")
             
             result_info = []
             if self.jamming_events:
                  for i, ev in enumerate(self.jamming_events):
+                    tri_result = self.triangulation_result
+                    print(f"[WORKER] Dodaję event {i+1}, triangulation={tri_result}")
                     result_info.append({
                         'type': 'jamming',
                         'event_number': i + 1,
@@ -723,7 +748,7 @@ class GPSAnalysisThread(QThread):
                         'start_time': ev['start_time'],
                         'end_time': ev['end_time'],
                         'duration': ev['duration'],
-                        'triangulation': self.triangulation_result
+                        'triangulation': tri_result
                     })
             else:
                  result_info.append({'type': 'no_jamming'})
@@ -731,27 +756,40 @@ class GPSAnalysisThread(QThread):
             self.analysis_complete.emit(result_info)
 
     def analyze_triangulation_after_gnssdec(self):
+        print("[WORKER] analyze_triangulation_after_gnssdec() wywołane!")
+        
         def triangulation_worker():
+            print("[TRIANGULACJA] Wątek triangulacji uruchomiony!")
             try:
                 if len(self.file_paths) < 2: 
-                    print("[TRIANGULACJA] Za mało plików do triangulacji.")
+                    print(f"[TRIANGULACJA] Za mało plików do triangulacji: {len(self.file_paths)}")
+                    self.triangulation_result = {'success': False, 'message': 'Za mało plików'}
                     return
 
-                print(f"[TRIANGULACJA] Start obliczeń...")
+                print(f"[TRIANGULACJA] Start obliczeń z {len(self.file_paths)} plikami...")
                 final_position = self.last_position_before_jamming
+                print(f"[TRIANGULACJA] last_position_before_jamming: {final_position}")
+                
                 if final_position['valid']:
                     ref_lat = final_position['lat']
                     ref_lon = final_position['lon']
+                    print(f"[TRIANGULACJA] Używam pozycji z last_position: {ref_lat}, {ref_lon}")
                 else:
-                    ref_lat = self.current_lat if self.current_lat != 0.0 else 50.00901672664575, 
-                    ref_lon = self.current_lon if self.current_lon != 0.0 else 19.98287653059589
+                    # Użyj pozycji bazowej przekazanej z UI (ustawionej przez użytkownika)
+                    ref_lat = self.base_position['latitude']
+                    ref_lon = self.base_position['longitude']
+                    print(f"[TRIANGULACJA] Używam pozycji bazowej z ustawień: {ref_lat}, {ref_lon}")
                 
                 test_files = self.get_test_files_for_triangulation()
+                print(f"[TRIANGULACJA] Pliki testowe: {test_files}")
+                
                 antenna_positions_meters = [
                     np.array(self.antenna_positions['antenna1']),
                     np.array(self.antenna_positions['antenna2']),
                     np.array(self.antenna_positions['antenna3'])
                 ]
+                print(f"[TRIANGULACJA] Pozycje anten: {antenna_positions_meters}")
+                print(f"[TRIANGULACJA] Wywołuję triangulate_jammer_location...")
                 
                 result = triangulate_jammer_location(
                     file_paths=test_files,
@@ -765,10 +803,13 @@ class GPSAnalysisThread(QThread):
                     verbose=False
                 )
                 
+                print(f"[TRIANGULACJA] Funkcja zwróciła wynik: success={result.get('success')}")
+                
                 if result['success'] and final_position['valid']:
                     result['reference_position'] = final_position
                 
                 self.triangulation_result = result
+                print(f"[TRIANGULACJA] Przypisano self.triangulation_result: {result.get('success')}")
                 
                 # Wyświetl wyniki triangulacji w terminalu
                 if result.get('success', False):
@@ -804,13 +845,21 @@ class GPSAnalysisThread(QThread):
                         print(f"   Status: {result['message']}")
                     
                     print(f"{'='*60}\n")
+                else:
+                    print(f"[TRIANGULACJA] Triangulacja nieudana: {result.get('message', 'Brak komunikatu')}")
                 
                 self.triangulation_complete.emit(result)
+                print("[TRIANGULACJA] Emitowano sygnał triangulation_complete")
             except Exception as e:
-                print(f"[TRIANGULACJA] Błąd: {e}")
+                print(f"[TRIANGULACJA] BŁĄD: {e}")
+                import traceback
+                traceback.print_exc()
+                self.triangulation_result = {'success': False, 'message': str(e)}
         
+        print("[WORKER] Tworzę wątek triangulacji...")
         self.triangulation_thread = threading.Thread(target=triangulation_worker)
         self.triangulation_thread.start()
+        print("[WORKER] Wątek triangulacji uruchomiony!")
 
     def get_test_files_for_triangulation(self):
         test_files = []
